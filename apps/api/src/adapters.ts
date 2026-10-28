@@ -38,9 +38,10 @@ export function createMockAdapter(ctx: Pick<AdapterContext, 'now'> = { now: () =
 }
 
 /**
- * PayPal sandbox (packages/adapters, 개발팀3). Credentials come only from the
- * environment (PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, optional PAYPAL_BASE_URL);
- * missing ones fail at startup. No network call happens until the first pay().
+ * PayPal Payouts adapter (packages/adapters `createPayPalAdapter`). Payee must be
+ * an email address. Credentials from PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, and
+ * optional PAYPAL_BASE_URL; missing required vars fail at factory time. No network
+ * until the first pay().
  */
 export const paypalFactory: AdapterFactory = (ctx) => {
   let config;

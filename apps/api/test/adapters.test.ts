@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { AdapterValidationError } from '@agent-pay/adapters';
 import type { PaymentIntent, Rail } from '@agent-pay/core';
 import {
   AdapterConfigError,
@@ -56,6 +57,20 @@ test('paypal is wired to packages/adapters and needs credentials from env', asyn
     now: NOW,
   });
   assert.equal(adapter.rail, 'paypal');
+});
+
+test('paypal adapter is Payouts: status, no refund, email payee required', async () => {
+  const adapter = await createAdapter('paypal', {
+    env: {
+      PAYPAL_CLIENT_ID: 'test-id',
+      PAYPAL_CLIENT_SECRET: 'test-secret',
+      PAYPAL_BASE_URL: 'http://127.0.0.1:9',
+    },
+    now: NOW,
+  });
+  assert.equal(typeof (adapter as { status?: unknown }).status, 'function');
+  assert.equal(adapter.refund, undefined);
+  await assert.rejects(() => adapter.pay(intent()), (err: unknown) => err instanceof AdapterValidationError);
 });
 
 test('createAdapter("mock") pays with a succeeded receipt matching the intent', async () => {
