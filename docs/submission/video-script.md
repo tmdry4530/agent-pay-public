@@ -91,10 +91,13 @@ instead of paying twice.
 **On screen:** Terminal. Run:
 
 ```sh
-npm run -s agent -w @agent-pay/agent -- --scenario small --json
+npm run -s agent -- --scenario small --json
 ```
 
-NDJSON scrolls by: `task`, `quote`, `submit_intent`, `intent_result` step events, then one `summary` line.
+(`-s` keeps npm's `> agent` banner out of the NDJSON. The recorded `docs/demo/agent-pay-submission.webm` shows the
+equivalent workspace form `npm run -s agent -w @agent-pay/agent -- --scenario small --json`.)
+
+NDJSON scrolls by: `health`, `task`, `quote`, `submit_intent`, `intent_result` step events, then one `summary` line.
 Highlight `"apiStatus":"paid"` and `"exitCode":0`. Excerpt from a real local run (ids and timestamps differ per
 run):
 

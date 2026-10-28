@@ -98,15 +98,16 @@ in, and run `node --env-file=.env apps/api/src/main.ts`.
 Run the three scenarios (terminal 2):
 
 ```sh
-npm run agent -w @agent-pay/agent -- --scenario small
-npm run agent -w @agent-pay/agent -- --scenario over-limit
-npm run agent -w @agent-pay/agent -- --scenario needs-approval --auto-approve-as alice
+npm run agent -- --scenario small
+npm run agent -- --scenario over-limit
+npm run agent -- --scenario needs-approval --auto-approve-as alice
 ```
 
 The agent first calls `GET /health` (if the API is not reachable it exits 1 immediately), then reads the rail
 once from `GET /rail` and prints `server: http://127.0.0.1:8787 rail=mock`. `--rail <name>` makes it exit 1 when
 the server runs a different rail.
-Add `--json` for NDJSON output, or use `npm run -s agent ...` to hide npm's banner and its error footer on a
+Add `--json` for NDJSON output (`npm run agent -- --scenario small --json`). npm prints its `> agent` banner on
+stdout first, so when piping NDJSON use `npm run -s agent -- ...`, which also hides npm's error footer on a
 non-zero exit.
 
 ## Scenarios
@@ -160,7 +161,7 @@ Receipt: mock mock_… (succeeded)
 scenario without it and approve the printed intent id from another terminal:
 
 ```sh
-npm run agent -w @agent-pay/agent -- --scenario needs-approval
+npm run agent -- --scenario needs-approval
 curl -X POST localhost:8787/intents/<intent id>/approve -H 'content-type: application/json' -d '{"approver":"alice"}'
 ```
 

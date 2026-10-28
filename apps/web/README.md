@@ -14,7 +14,7 @@ default cache path can fail with `EACCES`, so point it at a user-writable direct
 
 ```bash
 export COREPACK_HOME="$HOME/.cache/node/corepack"
-npm run web:install          # from the repo root (pnpm -C apps/web install --frozen-lockfile)
+npm run web:install          # from the repo root (cd apps/web && pnpm install --frozen-lockfile)
 pnpm -C apps/web --version   # expect 11.28.5 when pnpm is resolved through Corepack
 ```
 

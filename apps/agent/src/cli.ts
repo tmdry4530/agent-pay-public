@@ -6,7 +6,7 @@ const HELP = `agent-pay task agent (demo CLI)
 
 Usage:
   node src/cli.ts [--task <text> | <task...>] [--scenario small|over-limit|needs-approval]
-  npm run agent -w @agent-pay/agent -- --scenario small
+  npm run agent -- --scenario small
 
 Options:
   --api <url>              API base URL (default: http://127.0.0.1:8787)

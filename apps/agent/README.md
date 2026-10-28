@@ -14,16 +14,16 @@ stops with `rail_inconsistent` (exit 1). The planner itself stays rail-agnostic.
 ```sh
 npm start -w @agent-pay/api                                   # terminal 1: API on :8787, RAIL=mock
 
-npm run agent -w @agent-pay/agent -- --scenario small          # terminal 2
-npm run agent -w @agent-pay/agent -- --scenario over-limit
-npm run agent -w @agent-pay/agent -- --scenario needs-approval --auto-approve-as alice
-npm run agent -w @agent-pay/agent -- --scenario needs-approval   # then approve it yourself:
+npm run agent -- --scenario small          # terminal 2
+npm run agent -- --scenario over-limit
+npm run agent -- --scenario needs-approval --auto-approve-as alice
+npm run agent -- --scenario needs-approval   # then approve it yourself:
 #   curl -X POST localhost:8787/intents/<id>/approve -H 'content-type: application/json' -d '{"approver":"alice"}'
-npm run agent -w @agent-pay/agent -- "rent a GPU on NEAR for 3 hours"
-npm run agent -w @agent-pay/agent -- --scenario small --json
+npm run agent -- "rent a GPU on NEAR for 3 hours"
+npm run agent -- --scenario small --json
 ```
 
-Use `npm run -s ...` to hide npm's own banner and its error footer on non-zero exits.
+Run these from the repo root. Use `npm run -s agent -- ...` (e.g. when piping `--json` output) to hide npm's own `> agent` banner and its error footer on non-zero exits.
 
 | Option | Default | |
 |---|---|---|
