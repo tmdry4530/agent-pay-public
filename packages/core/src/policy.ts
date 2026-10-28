@@ -11,6 +11,8 @@ export const ReasonCode = {
   DailyLimitExceeded: 'daily_limit_exceeded',
   ApprovalRequired: 'approval_required',
   WithinPolicy: 'within_policy',
+  ApprovedByHuman: 'approved_by_human',
+  RejectedByHuman: 'rejected_by_human',
 } as const;
 export type ReasonCode = (typeof ReasonCode)[keyof typeof ReasonCode];
 

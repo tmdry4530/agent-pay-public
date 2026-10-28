@@ -47,6 +47,40 @@ interface PaymentAdapter {
 - If the rail declines the payment, resolve with `status: 'failed'`. Throw only for unexpected errors.
 - `refund` resolves with a new receipt (`status: 'refunded'`).
 
+## Orchestrator: `runPayment`, `approve`, `reject`
+```ts
+const r = await runPayment(intent, policy, ledger, adapter);
+// r: { intentId, status: 'paid'|'rejected'|'needs_approval'|'failed', decision, receipt?, error?, replayed? }
+if (r.status === 'needs_approval') {
+  await approve(intent.id, { policy, ledger, adapter, approver: 'alice' }); // or reject(intent.id, { ledger, approver, note })
+}
+```
+- **`runPayment`** records the intent, evaluates it with `ledger.ledgerStateFor(intent)`, records the decision,
+  and calls `adapter.pay` only for `approved`. Then it records the payment and the receipt.
+- **Statuses:** `paid` = receipt `succeeded` or `pending` (counts toward the daily total). `failed` = approved but
+  not paid (does not count). `rejected` / `needs_approval` = the policy decision; the adapter was not called.
+- **Adapter failures are results, not throws.** `error` is `"<code>: <detail>"`:
+  - `adapter_error`: `pay` threw. The payment is recorded as `failed` and no receipt is stored.
+  - `receipt_mismatch`: the receipt's `intentId` ≠ `intent.id`, its `rail` ≠ `adapter.rail`, or its status isn't
+    `succeeded`/`pending`/`failed`. Recorded as `failed`, and the bad receipt is not stored. The rail may still
+    have moved money, so reconcile it out of band.
+  - `payment_declined`: the receipt status is `failed`. Recorded as `failed`, and the receipt is stored.
+  Ledger I/O errors still throw.
+- **Idempotent per intent id.** If the same intent (deep-equal) is already recorded, its stored outcome comes back
+  with `replayed: true` and `pay` is **not** called again. It throws `PaymentError` with code `intent_conflict`
+  when the id was recorded with different content, and `in_progress` when the entry is mid-flight (undecided, or
+  approved with no payment recorded: another run is paying, or a crash needs manual reconciliation).
+- **`approve(intentId, {policy, ledger, adapter, approver?})`** resumes a `needs_approval` intent. It throws
+  `PaymentError` with code `intent_not_found`, `already_paid` or `not_pending`. Then it re-runs `evaluate` against
+  the current ledger with the approval threshold disabled, so the agent, currency, amount, payee, per-tx and daily
+  limits still apply. If the re-check fails, the decision is replaced with that rejection (reason suffix
+  `(re-checked on approval by …)`), the result is `rejected` and nothing is paid. Otherwise the decision becomes
+  `approved_by_human: approved by "<approver>"; …` and the pay/receipt steps run as in `runPayment`.
+- **`reject(intentId, {ledger, approver?, note?})`** turns a `needs_approval` intent into `rejected_by_human: …`.
+  It throws the same errors as `approve`.
+- Both replace the decision with `recordDecision(id, d, { ifStatus: 'needs_approval' })`, so of two concurrent
+  approvals on one Ledger instance, only one pays. The single-writer-per-file rule still applies.
+
 ## `Ledger`
 ```ts
 const ledger = new Ledger({ filePath: 'data/ledger.json', now: () => new Date() });
@@ -63,7 +97,8 @@ if (decision.status === 'approved') {
   An unknown format throws and is not overwritten.
 - Order is enforced: decision needs an intent; payment needs an `approved` decision and no earlier payment;
   receipt needs a recorded payment and a matching `intentId`. A decision can be replaced until payment is
-  recorded (e.g. `needs_approval` → `approved` after a human approves). Receipts can be replaced
+  recorded (e.g. `needs_approval` → `approved` after a human approves). Pass `{ ifStatus }` as the third argument
+  to `recordDecision` to make the replacement conditional on the current status. Receipts can be replaced
   (e.g. pending → succeeded, or a refund receipt).
 - **Daily totals:** grouped by the **UTC** date of `intent.createdAt`, not the record time and not KST.
   For example, 08:30 KST on 10/29 counts toward 10/28 UTC. `dailyTotal(agentId, day?)` takes a

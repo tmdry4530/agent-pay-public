@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { Decision, LedgerState, PaymentIntent, Receipt } from './types.ts';
+import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
 
 export type PaymentStatus = 'paid' | 'failed';
 
@@ -106,12 +106,24 @@ export class Ledger {
   /**
    * Records (or replaces) the decision. Replacing is allowed until a payment is
    * recorded, e.g. needs_approval -> approved after a human approves.
+   *
+   * `options.ifStatus` makes the write conditional: it throws unless the current
+   * decision status equals it (compare-and-set within this instance's write queue).
    */
-  recordDecision(intentId: string, decision: Decision): Promise<LedgerEntry> {
+  recordDecision(
+    intentId: string,
+    decision: Decision,
+    options: { ifStatus?: DecisionStatus } = {},
+  ): Promise<LedgerEntry> {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
       if (entry.paymentStatus !== undefined) {
         throw new LedgerError(`intent ${intentId} already has a payment; decision is final`);
+      }
+      if (options.ifStatus !== undefined && entry.decision?.status !== options.ifStatus) {
+        throw new LedgerError(
+          `intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${options.ifStatus}`,
+        );
       }
       entry.decision = { ...decision };
       entry.updatedAt = this.#now().toISOString();
