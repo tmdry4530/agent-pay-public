@@ -55,9 +55,10 @@ If no item status, batch `batch_status` is used:
 |-----------|---------|
 | Token endpoint failure (any) | `failed`, `externalId: ''` |
 | `POST /payouts` **4xx** (except handled duplicate — see idempotency) | `failed`, `externalId: ''` |
-| `POST /payouts` **5xx**, any thrown error on POST (network, timeout, abort, other), or **2xx** with unparseable body / missing `payout_batch_id` | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'` |
-| Duplicate `sender_batch_id` with HATEOAS link to existing batch | `GET` batch; on success return that receipt; on GET error/non-2xx → `pending`, `externalId: batch id`, `meta.unknownOutcome: 'true'` |
-| Duplicate error **without** batch link | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.duplicateSenderBatchId: 'true'` |
+| `POST /payouts` **5xx**, any thrown error on POST (network, timeout, abort, other), or **2xx** with unparseable body / missing `payout_batch_id` | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.needsManualResolve: 'true'`, optional `meta.errorName` from PayPal error name when known |
+| Duplicate `sender_batch_id` with HATEOAS link to existing batch | `GET` batch; on success return that receipt (with `meta.duplicateSenderBatchId` / `meta.errorName` from duplicate error); on GET error/non-2xx → `pending`, `externalId: batch id`, `meta.unknownOutcome: 'true'` (no `needsManualResolve`) |
+| Duplicate error **without** batch link | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.duplicateSenderBatchId: 'true'`, `meta.needsManualResolve: 'true'`, `meta.errorName` when PayPal names the error |
+| **2xx** batch body with **2+ items** (POST 201 or duplicate-path GET) | `pending`, `externalId: batch id`, `meta.needsManualResolve: 'true'`, `meta.errorName: 'receipt_mismatch'`, `meta.itemCount`, `meta.batchStatus` (+ first-item fields when present). Does **not** throw — failing pay would free the daily limit and risk double-pay. |
 
 Every converted failure or unknown outcome invokes `onError(error, { intentId, op })` with `op` in `token` | `payout` | `status`. Never log secrets.
 
@@ -65,7 +66,8 @@ Every converted failure or unknown outcome invokes `onError(error, { intentId, o
 
 - Wrong `rail` → throws.
 - `externalId === ''` → returns input unchanged (no batch id to query; caller may retry `pay(intent)` — idempotent via `sender_batch_id`).
-- Otherwise refreshes from PayPal; on any error returns input unchanged and calls `onError` with `op: 'status'`.
+- Otherwise refreshes from PayPal; batch with **2+ items** → throws `receipt_mismatch: …`, `onError` with `op: 'status'` (core wraps as `status_check_failed`; nothing stored).
+- On other errors returns input unchanged and calls `onError` with `op: 'status'`.
 
 ## Receipt `meta` (payouts)
 
@@ -76,8 +78,11 @@ String keys only (never secrets):
 | `batchStatus` | Batch status from PayPal |
 | `payoutItemId` | First item `payout_item_id` when present |
 | `transactionStatus` | First item `transaction_status` when present |
-| `unknownOutcome` | `'true'` when pay ended pending due to uncertain outcome (5xx, POST fetch throw, bad 2xx body, duplicate without resolvable batch) |
-| `duplicateSenderBatchId` | `'true'` when duplicate id error had no batch link (manual verification) |
+| `unknownOutcome` | `'true'` when pay ended pending due to uncertain outcome (5xx, POST fetch throw, bad 2xx body, duplicate without resolvable batch, or duplicate GET failure with batch id) |
+| `needsManualResolve` | `'true'` when outcome is uncertain and operator must settle (planned `POST /intents/:id/resolve`): empty `externalId` after unknown pay, or multi-item batch on pay with batch id |
+| `errorName` | PayPal error `name` when known (`PayPalApiError` with a specific name, or duplicate-guess from parsed 4xx body); `'receipt_mismatch'` when batch has 2+ items; omitted for non-PayPal errors (e.g. network `TypeError`) |
+| `itemCount` | String count of batch `items[]` when `errorName` is `receipt_mismatch` |
+| `duplicateSenderBatchId` | `'true'` on duplicate `sender_batch_id` errors (with or without batch link); signals idempotency collision |
 
 ## Idempotency
 
@@ -195,8 +200,8 @@ Examples: `alice.testnet` is payable on testnet; `alice.near` is not. `Alice.tes
 
 - [assumption] JSON-RPC errors are HTTP 200 bodies shaped as `{ error: { code, message, data: { name: 'HANDLER_ERROR', cause: { name } } } }`. `name` / `cause` placed directly on `error`, and a string `error.data` (for example `"UNKNOWN_TRANSACTION"`), are accepted as the same cause name.
 - [assumption] `cause.name === 'INVALID_TRANSACTION'` together with `HANDLER_ERROR` means the tx was not executed (`InvalidNonce`, `NotEnoughBalance`, `InvalidSignature`, …) → `rejected` with the precomputed tx hash. `TIMEOUT_ERROR`, thrown `fetch`, abort, and HTTP 5xx after `send_tx` → `unknown` with that hash (the tx may still execute). HTTP 4xx on `send_tx` → `rejected`. Any access-key query failure happens before broadcast → `rejected` **without** a tx hash.
-- [assumption] `send_tx` params are `{ signed_tx_base64, wait_until }` and `tx` params are `{ tx_hash, sender_account_id, wait_until }` (object form, not the legacy positional array). `wait_until` strings are `NONE`, `INCLUDED`, `EXECUTED_OPTIMISTIC`, `INCLUDED_FINAL`, `EXECUTED`, `FINAL`. Send defaults to `EXECUTED_OPTIMISTIC`. Status calls always use `EXECUTED_OPTIMISTIC` because `NONE` does not include `SuccessValue` / `Failure`.
-- [assumption] `result.status.SuccessValue !== undefined` (including `""`) is a successful execution. `result.status.Failure` is a final on-chain failure. The failure object is not copied onto the receipt.
+- [assumption] `send_tx` params are `{ signed_tx_base64, wait_until }` and `tx` params are `{ tx_hash, sender_account_id, wait_until }` (object form, not the legacy positional array). `wait_until` strings are `NONE`, `INCLUDED`, `EXECUTED_OPTIMISTIC`, `INCLUDED_FINAL`, `EXECUTED`, `FINAL`. Send and status both default to `FINAL` (NEAR docs recommend waiting for finality before treating a submission as settled).
+- [assumption] `SuccessValue` or `Failure` in `result.status` only maps to `final` when `result.final_execution_status === 'FINAL'`. Otherwise the outcome stays `unknown` (`pending` on pay, unchanged receipt on status) with error `transaction not final`. A non-final `Failure` is not marked failed so a daily-limit slot is not freed prematurely. The failure object is not copied onto the receipt.
 - [assumption] Access-key `nonce` is a safe integer or a decimal string. The next tx uses `nonce + 1`. `block_hash` is base58 of 32 bytes. Default RPC timeout is 30 seconds.
 - [assumption] A 64-byte secret's public half must match the ed25519 key derived from its seed. The public key placed in the transaction is that 32-byte key. Signature scheme is standard Ed25519 over the sha256 hash (what nearcore signs), via `node:crypto` and the PKCS#8 prefix `302e020100300506032b657004220420`.
 - Named accounts outside `.testnet` / `.near`, and implicit accounts that are not 64 lowercase hex chars, are refused even if they are syntactically valid NEAR ids (`alice` is a valid id and still not an accepted payee).

@@ -14,6 +14,7 @@ import {
   type Policy,
 } from '@agent-pay/core';
 import { ValidationError, parseDecisionBody, parseIntentBody, parsePolicy } from './validate.ts';
+import { resolveRoute } from './resolve-route.ts';
 
 /** Seed policy for demos. Replace at runtime with PUT /policy. */
 export const DEFAULT_POLICY: Policy = {
@@ -149,6 +150,7 @@ export function createApp(options: AppOptions) {
         },
       },
     },
+    resolveRoute({ ledger, now, readJson }),
     {
       pattern: /^\/ledger$/,
       methods: {

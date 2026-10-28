@@ -5,11 +5,21 @@ import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Receipt } fr
 
 export type PaymentStatus = 'paid' | 'failed';
 
+export interface ReceiptResolution {
+  status: 'succeeded' | 'failed' | 'refunded';
+  resolvedBy: string;
+  note: string;
+  at: string;
+  previousExternalId: string;
+}
+
 export interface LedgerEntry {
   intent: PaymentIntent;
   decision?: Decision;
   paymentStatus?: PaymentStatus;
   receipt?: Receipt;
+  /** Set only by a manual operator resolve (POST /intents/:id/resolve). */
+  resolution?: ReceiptResolution;
   /** ISO time the intent was recorded (from the injected clock). */
   recordedAt: string;
   /** ISO time of the last change to this entry (from the injected clock). */
@@ -155,7 +165,7 @@ export class Ledger {
    * status is `failed`, also sets `paymentStatus` to `failed` (same as payApproved).
    * Throws LedgerError on mismatch or if the receipt is not pending.
    */
-  settleReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry> {
+  settleReceipt(intentId: string, receipt: Receipt, resolution?: ReceiptResolution): Promise<LedgerEntry> {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
       if (receipt.intentId !== intentId) {
@@ -173,6 +183,7 @@ export class Ledger {
       }
       entry.receipt = { ...receipt };
       if (receipt.status === 'failed') entry.paymentStatus = 'failed';
+      if (resolution !== undefined) entry.resolution = { ...resolution };
       entry.updatedAt = this.#now().toISOString();
       return entry;
     });

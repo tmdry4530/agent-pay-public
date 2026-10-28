@@ -114,7 +114,7 @@ async function startNearMock(t: { after: (fn: () => Promise<void>) => void }) {
       }
       if (parsed.method === 'tx') {
         txCalls++;
-        send({ jsonrpc: '2.0', id: '1', result: { status: { SuccessValue: '' } } });
+        send({ jsonrpc: '2.0', id: '1', result: { final_execution_status: 'FINAL', status: { SuccessValue: '' } } });
         return;
       }
       send({ jsonrpc: '2.0', id: '1', error: { code: -32601, message: 'method not found' } });

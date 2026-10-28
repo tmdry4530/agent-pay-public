@@ -40,6 +40,10 @@ function rpcResult(result: unknown): unknown {
   return { jsonrpc: '2.0', id: 'dontcare', result };
 }
 
+function rpcFinalOutcome(status: Record<string, unknown>): unknown {
+  return rpcResult({ final_execution_status: 'FINAL', status });
+}
+
 function rpcError(causeName: string, message = 'Server error'): unknown {
   return {
     jsonrpc: '2.0',
@@ -158,7 +162,7 @@ function assertSigned(calls: RpcRequest[], rawPub: Uint8Array, publicKey: KeyObj
   const send = calls[1];
   assert.ok(send);
   assert.equal(send.method, 'send_tx');
-  assert.equal(send.params.wait_until, 'EXECUTED_OPTIMISTIC');
+  assert.equal(send.params.wait_until, 'FINAL');
   const signedTxBase64 = send.params.signed_tx_base64;
   assert.equal(typeof signedTxBase64, 'string');
   if (typeof signedTxBase64 !== 'string') {
@@ -252,7 +256,7 @@ describe('createNearRpcClient', () => {
 
   for (const form of ['secret', 'seed'] as const) {
     it(`signs a ${form} key transfer and reports final success`, async () => {
-      const sent = await sendWith(form, () => jsonResponse(rpcResult({ status: { SuccessValue: '' } })));
+      const sent = await sendWith(form, () => jsonResponse(rpcFinalOutcome({ SuccessValue: '' })));
       assert.equal(sent.result.kind, 'final');
       if (sent.result.kind !== 'final') {
         return;
@@ -266,7 +270,7 @@ describe('createNearRpcClient', () => {
 
   it('maps failure, rejection, timeout, transport errors, and a failed access-key query', async () => {
     const failure = await sendWith('secret', () =>
-      jsonResponse(rpcResult({ status: { Failure: { ActionError: { kind: 'nope' } } } })),
+      jsonResponse(rpcFinalOutcome({ Failure: { ActionError: { kind: 'nope' } } })),
     );
     assert.equal(failure.result.kind, 'final');
     if (failure.result.kind !== 'final') {
@@ -335,7 +339,7 @@ describe('createNearRpcClient', () => {
 
     const queryThrown = await sendWith(
       'secret',
-      () => jsonResponse(rpcResult({ status: { SuccessValue: '' } })),
+      () => jsonResponse(rpcFinalOutcome({ SuccessValue: '' })),
       (_req, nearKey) => {
         throw new Error(`dns ${nearKey}`);
       },
@@ -353,12 +357,12 @@ describe('createNearRpcClient', () => {
       assert.equal(req.method, 'tx');
       assert.equal(req.params.tx_hash, 'abc');
       assert.equal(req.params.sender_account_id, accountId);
-      assert.equal(req.params.wait_until, 'EXECUTED_OPTIMISTIC');
+      assert.equal(req.params.wait_until, 'FINAL');
       if (mode === 'success') {
-        return jsonResponse(rpcResult({ status: { SuccessValue: '' } }));
+        return jsonResponse(rpcFinalOutcome({ SuccessValue: '' }));
       }
       if (mode === 'failure') {
-        return jsonResponse(rpcResult({ status: { Failure: { kind: 'x' } } }));
+        return jsonResponse(rpcFinalOutcome({ Failure: { kind: 'x' } }));
       }
       if (mode === 'missing') {
         return jsonResponse(rpcError('UNKNOWN_TRANSACTION', key.nearKey));
