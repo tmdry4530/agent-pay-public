@@ -23,6 +23,8 @@ const pageErrors = [];
 const consoleErrors = [];
 /** @type {ReturnType<typeof setTimeout>[]} */
 const captionTimers = [];
+/** @type {{ tag: string; testId: string; elTop: number; elBottom: number; captionTop: number; captionBottom: number; overlap: boolean }[]} */
+const captionOverlapChecks = [];
 
 let t0 = 0;
 let signalExitCode = null;
@@ -275,6 +277,76 @@ async function pause(page, ms) {
   }
 }
 
+async function scrollToTop(page) {
+  await page.evaluate(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  });
+}
+
+async function scrollAboveCaption(page, testId) {
+  await page.evaluate((id) => {
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    if (!el) return;
+    const box = document.querySelector('#submission-caption .submission-caption__box');
+    const captionTop = box
+      ? box.getBoundingClientRect().top
+      : window.innerHeight - 140;
+    const gap = 16;
+    const minTop = 8;
+    const targetBottom = captionTop - gap;
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom > targetBottom) {
+      const scrollDown = rect.bottom - targetBottom;
+      const topAfter = rect.top - scrollDown;
+      if (topAfter < minTop) {
+        window.scrollBy({ top: rect.top - minTop, behavior: 'instant' });
+      } else {
+        window.scrollBy({ top: scrollDown, behavior: 'instant' });
+      }
+    }
+  }, testId);
+  await pause(page, 400);
+}
+
+async function assertNotUnderCaption(page, testId, tag) {
+  const metrics = await page.evaluate((id) => {
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    const box = document.querySelector('#submission-caption .submission-caption__box');
+    let captionTop;
+    let captionBottom;
+    if (box) {
+      const r = box.getBoundingClientRect();
+      captionTop = r.top;
+      captionBottom = r.bottom;
+    } else {
+      captionTop = window.innerHeight - 140;
+      captionBottom = window.innerHeight;
+    }
+    let elTop = 0;
+    let elBottom = 0;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      elTop = r.top;
+      elBottom = r.bottom;
+    }
+    const overlap = elBottom > captionTop && elTop < captionBottom;
+    return { testId: id, elTop, elBottom, captionTop, captionBottom, overlap };
+  }, testId);
+  const check = { tag, ...metrics };
+  captionOverlapChecks.push(check);
+  if (check.overlap) {
+    throw new Error(
+      `caption overlaps ${tag} [data-testid=${testId}]: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption ${check.captionTop.toFixed(1)}–${check.captionBottom.toFixed(1)}`,
+    );
+  }
+  return check;
+}
+
+async function refocusAboveCaption(page, testId, tag) {
+  await scrollAboveCaption(page, testId);
+  await assertNotUnderCaption(page, testId, tag);
+}
+
 function stripMarkdownBackticks(title) {
   return title.replace(/`/g, '');
 }
@@ -394,11 +466,6 @@ async function highlight(page, testId) {
     el.style.outlineOffset = '4px';
     el.style.borderRadius = '12px';
     el.setAttribute('data-demo-hl', '');
-    el.scrollIntoView({ block: 'center', behavior: 'instant' });
-    const captionRegionTop = 800 - 150;
-    if (el.getBoundingClientRect().bottom > captionRegionTop) {
-      window.scrollBy(0, 60);
-    }
   }, testId);
 }
 
@@ -799,11 +866,18 @@ try {
     scheduleCaptions();
     await clearHighlights(page);
     await clickScenarioFlow(page, 'scenario-approved');
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene2-decision');
     await pause(page, 2200);
+    await refocusAboveCaption(page, 'decision', 'scene2-decision-after-pause');
     await page.getByTestId('receipt').waitFor({ state: 'visible' });
+    await scrollAboveCaption(page, 'receipt');
     await highlight(page, 'receipt');
+    await assertNotUnderCaption(page, 'receipt', 'scene2-receipt');
     await pause(page, 2200);
+    await refocusAboveCaption(page, 'receipt', 'scene2-receipt-after-pause');
+    await scrollToTop(page);
     await highlight(page, 'gauge');
     await pause(page, 2000);
   });
@@ -813,8 +887,12 @@ try {
     scheduleCaptions();
     await clearHighlights(page);
     await clickScenarioFlow(page, 'scenario-rejected');
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene3-decision');
     await pause(page, 2800);
+    await refocusAboveCaption(page, 'decision', 'scene3-decision-after-pause');
+    await scrollToTop(page);
     await highlight(page, 'gauge');
     await pause(page, 2000);
   });
@@ -826,8 +904,12 @@ try {
     await clickScenarioFlow(page, 'scenario-needs-approval');
     await highlightSelector(page, 'ol.stepper');
     await pause(page, 2200);
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene4-decision');
     await pause(page, 2200);
+    await refocusAboveCaption(page, 'decision', 'scene4-decision-after-pause');
+    await scrollAboveCaption(page, 'btn-approve');
     await highlight(page, 'btn-approve');
     await pause(page, 2000);
   });
@@ -839,11 +921,18 @@ try {
     await page.getByTestId('btn-approve').click();
     await pause(page, 1800);
     await page.getByTestId('human-outcome').waitFor({ state: 'visible' });
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene5-decision');
     await pause(page, 1800);
+    await refocusAboveCaption(page, 'decision', 'scene5-decision-after-pause');
     await page.getByTestId('receipt').waitFor({ state: 'visible' });
+    await scrollAboveCaption(page, 'receipt');
     await highlight(page, 'receipt');
+    await assertNotUnderCaption(page, 'receipt', 'scene5-receipt');
     await pause(page, 1800);
+    await refocusAboveCaption(page, 'receipt', 'scene5-receipt-after-pause');
+    await scrollToTop(page);
     await highlight(page, 'gauge');
     await pause(page, 1500);
   });
@@ -852,6 +941,7 @@ try {
   await runScene(6, async (_scene, scheduleCaptions) => {
     scheduleCaptions();
     await clearHighlights(page);
+    await scrollToTop(page);
     await highlight(page, 'ledger');
     await pause(page, 800);
     await startLedgerZoom(page);
@@ -930,7 +1020,10 @@ try {
   browser = null;
 
   const timingPath = path.join(os.tmpdir(), 'agent-pay-submission-timing.json');
-  fs.writeFileSync(timingPath, `${JSON.stringify({ t0, scenes: timingLog }, null, 2)}\n`);
+  fs.writeFileSync(
+    timingPath,
+    `${JSON.stringify({ t0, scenes: timingLog, captionOverlapChecks }, null, 2)}\n`,
+  );
 
   for (const row of timingLog) {
     console.log(
