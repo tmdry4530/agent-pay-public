@@ -13,7 +13,7 @@ import {
   type NearStatusResult,
   type NearTransferRequest,
   type PaymentIntent,
-  type Receipt,
+  type AdapterReceipt,
   type ReceiptStatus,
 } from '../src/index.ts';
 
@@ -70,7 +70,7 @@ function adapterFor(
   return createNearAdapter({ client, now: () => AT, ...extra });
 }
 
-function assertContract(receipt: Receipt, intentId: string): void {
+function assertContract(receipt: AdapterReceipt, intentId: string): void {
   assert.equal(receipt.intentId, intentId);
   assert.equal(receipt.rail, 'near');
   assert.ok(ALLOWED.has(receipt.status), `unexpected status: ${receipt.status}`);
@@ -300,7 +300,7 @@ describe('createNearAdapter', () => {
   });
 
   it('re-checks status for each tx outcome', async () => {
-    const pending: Receipt = {
+    const pending: AdapterReceipt = {
       intentId: 'intent-near-1',
       rail: 'near',
       externalId: 'tx-pending',
@@ -360,10 +360,10 @@ describe('createNearAdapter', () => {
     assert.equal(afterThrow, pending);
     assert.deepEqual(thrownSeen, ['status exploded']);
 
-    const other: Receipt = { ...pending, rail: 'mock' };
+    const other: AdapterReceipt = { ...pending, rail: 'mock' };
     await assert.rejects(() => adapterFor(createFakeClient()).status!(other), /another rail/);
 
-    const empty: Receipt = { ...pending, externalId: '' };
+    const empty: AdapterReceipt = { ...pending, externalId: '' };
     const emptyClient = createFakeClient();
     const same = await adapterFor(emptyClient).status!(empty);
     assert.equal(same, empty);

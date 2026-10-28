@@ -1,4 +1,5 @@
-import type { PaymentAdapter, PaymentIntent, Receipt, ReceiptStatus } from '@agent-pay/core';
+import type { PaymentIntent, Receipt, ReceiptStatus } from '@agent-pay/core';
+import type { AdapterReceipt, StatusCapableAdapter } from './adapter-types.ts';
 import type { NearNetworkId } from './near-account.ts';
 import type { NearClient, NearStatusResult } from './near-rpc.ts';
 import { isAcceptedPayee } from './near-account.ts';
@@ -18,7 +19,7 @@ export interface NearAdapterOptions {
  * be reversed by the payer. `validateIntent` is not used because it requires a
  * 3-letter ISO currency and NEAR is not one.
  */
-export function createNearAdapter(opts: NearAdapterOptions): PaymentAdapter {
+export function createNearAdapter(opts: NearAdapterOptions): StatusCapableAdapter {
   const client = opts.client;
   const networkId = opts.networkId ?? 'testnet';
   const now = opts.now ?? (() => new Date());
@@ -27,7 +28,7 @@ export function createNearAdapter(opts: NearAdapterOptions): PaymentAdapter {
   return {
     rail: 'near',
 
-    async pay(intent: PaymentIntent): Promise<Receipt> {
+    async pay(intent: PaymentIntent): Promise<AdapterReceipt> {
       const amountYocto = validateNearPay(intent, networkId, client.accountId);
       const meta: Record<string, string> = {
         amountYocto,
@@ -57,7 +58,7 @@ export function createNearAdapter(opts: NearAdapterOptions): PaymentAdapter {
       }
     },
 
-    async status(receiptIn: Receipt): Promise<Receipt> {
+    async status(receiptIn: Receipt): Promise<AdapterReceipt> {
       if (receiptIn.rail !== 'near') {
         throw new Error('Cannot query status for a receipt from another rail');
       }
@@ -80,15 +81,16 @@ export function createNearAdapter(opts: NearAdapterOptions): PaymentAdapter {
       if (result.kind === 'notFound') {
         return receiptIn;
       }
-      const updated: Receipt = {
+      const prior = receiptIn as AdapterReceipt;
+      const updated: AdapterReceipt = {
         intentId: receiptIn.intentId,
         rail: 'near',
         externalId: receiptIn.externalId,
         status: result.success ? 'succeeded' : 'failed',
         at: now().toISOString(),
       };
-      if (receiptIn.meta) {
-        updated.meta = { ...receiptIn.meta };
+      if (prior.meta) {
+        updated.meta = { ...prior.meta };
       }
       return updated;
     },
@@ -101,7 +103,7 @@ function receipt(
   externalId: string,
   meta: Record<string, string>,
   at: Date,
-): Receipt {
+): AdapterReceipt {
   return {
     intentId,
     rail: 'near',

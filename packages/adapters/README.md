@@ -24,6 +24,8 @@ Shared validation lives in `validateIntent` (`AdapterValidationError` on invalid
 
 Contract (from core): every receipt has `intentId === intent.id` and `rail === adapter.rail`. Invalid intents still throw `AdapterValidationError`. Refund misuse (wrong rail, non-`succeeded` receipt) throws.
 
+NEAR adapters may attach `meta` (`amountYocto`, `receiverId`, `network`, …) on receipts via the adapter-side `AdapterReceipt` type. Core `Receipt` has no `meta` field yet; the ledger may omit it until core adds it.
+
 ## PayPal `onError`
 
 Optional `PayPalConfig.onError(error, { intentId, op })` is invoked when a PayPal API or network error is turned into a **failed** receipt (`op` is `token`, `create`, `capture`, or `refund`). Use it for structured logging; never log client secrets.

@@ -28,3 +28,5 @@ export {
 } from './near-rpc.ts';
 export { parseNearToYocto, formatYoctoToNear } from './near-units.ts';
 export { isValidNearAccountId, isAcceptedPayee } from './near-account.ts';
+export { base58Encode } from './near-rpc.ts';
+export type { AdapterReceipt, StatusCapableAdapter } from './adapter-types.ts';
