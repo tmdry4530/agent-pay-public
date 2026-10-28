@@ -1,15 +1,33 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
+import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
 
 export type PaymentStatus = 'paid' | 'failed';
 
+export interface ReceiptResolution {
+  status: 'succeeded' | 'failed' | 'refunded';
+  resolvedBy: string;
+  note: string;
+  at: string;
+  previousExternalId: string;
+}
+
 export interface LedgerEntry {
   intent: PaymentIntent;
+  /** The latest decision (the last element of `decisions`, without `at`/`actor`). */
   decision?: Decision;
+  /**
+   * Every decision recorded for this intent, oldest first, e.g. needs_approval then the
+   * human's approval or rejection. Ledger always sets it (`[]` before the first decision;
+   * filled on read for older files). Optional in the type only so other LedgerEntry
+   * producers that predate it (the web app's in-memory ledger) still type-check.
+   */
+  decisions?: DecisionRecord[];
   paymentStatus?: PaymentStatus;
   receipt?: Receipt;
+  /** Set only by a manual operator resolve (POST /intents/:id/resolve). */
+  resolution?: ReceiptResolution;
   /** ISO time the intent was recorded (from the injected clock). */
   recordedAt: string;
   /** ISO time of the last change to this entry (from the injected clock). */
@@ -97,23 +115,25 @@ export class Ledger {
       }
       utcDay(intent.createdAt); // validates createdAt
       const at = this.#now().toISOString();
-      const entry: LedgerEntry = { intent: structuredClone(intent), recordedAt: at, updatedAt: at };
+      const entry: LedgerEntry = { intent: structuredClone(intent), decisions: [], recordedAt: at, updatedAt: at };
       file.entries.push(entry);
       return entry;
     });
   }
 
   /**
-   * Records (or replaces) the decision. Replacing is allowed until a payment is
-   * recorded, e.g. needs_approval -> approved after a human approves.
+   * Records a decision: sets `decision` to it and appends it to `decisions` with
+   * `at` (injected clock) and `options.actor` when given. A new decision is allowed
+   * until a payment is recorded, e.g. needs_approval -> approved after a human approves.
    *
    * `options.ifStatus` makes the write conditional: it throws unless the current
    * decision status equals it (compare-and-set within this instance's write queue).
+   * A throw writes nothing, so a lost race appends no history.
    */
   recordDecision(
     intentId: string,
     decision: Decision,
-    options: { ifStatus?: DecisionStatus } = {},
+    options: { ifStatus?: DecisionStatus; actor?: string } = {},
   ): Promise<LedgerEntry> {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
@@ -125,8 +145,12 @@ export class Ledger {
           `intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${options.ifStatus}`,
         );
       }
-      entry.decision = { ...decision };
-      entry.updatedAt = this.#now().toISOString();
+      const at = this.#now().toISOString();
+      entry.decision = { status: decision.status, reason: decision.reason };
+      const record: DecisionRecord = { ...entry.decision, at };
+      if (options.actor !== undefined) record.actor = options.actor;
+      (entry.decisions ??= []).push(record);
+      entry.updatedAt = at;
       return entry;
     });
   }
@@ -155,7 +179,7 @@ export class Ledger {
    * status is `failed`, also sets `paymentStatus` to `failed` (same as payApproved).
    * Throws LedgerError on mismatch or if the receipt is not pending.
    */
-  settleReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry> {
+  settleReceipt(intentId: string, receipt: Receipt, resolution?: ReceiptResolution): Promise<LedgerEntry> {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
       if (receipt.intentId !== intentId) {
@@ -173,6 +197,7 @@ export class Ledger {
       }
       entry.receipt = { ...receipt };
       if (receipt.status === 'failed') entry.paymentStatus = 'failed';
+      if (resolution !== undefined) entry.resolution = { ...resolution };
       entry.updatedAt = this.#now().toISOString();
       return entry;
     });
@@ -265,6 +290,11 @@ export class Ledger {
     const parsed = JSON.parse(raw) as LedgerFile;
     if (parsed?.version !== 1 || !Array.isArray(parsed.entries)) {
       throw new LedgerError(`unsupported ledger file format at ${this.filePath}`);
+    }
+    // Files written before decision history: back-fill in memory only. The file is
+    // rewritten in the new shape on the next mutation, never by a read.
+    for (const entry of parsed.entries) {
+      if (!Array.isArray(entry.decisions)) entry.decisions = entry.decision ? [{ ...entry.decision }] : [];
     }
     return parsed;
   }

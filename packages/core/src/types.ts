@@ -40,6 +40,23 @@ export interface Decision {
   reason: string;
 }
 
+/**
+ * One element of LedgerEntry.decisions: a recorded decision plus when and by whom.
+ * Kept in the order the decisions were recorded (oldest first).
+ */
+export interface DecisionRecord extends Decision {
+  /**
+   * ISO time from the ledger's injected clock when the decision was recorded.
+   * Absent only on records back-filled from a ledger file written before decision history existed.
+   */
+  at?: string;
+  /**
+   * Who made the decision, when known: 'policy' for the automatic evaluation (including the
+   * re-check that runs on approval), or the approver name passed to approve/reject.
+   */
+  actor?: string;
+}
+
 export type ReceiptStatus = 'succeeded' | 'pending' | 'failed' | 'refunded';
 
 export interface Receipt {

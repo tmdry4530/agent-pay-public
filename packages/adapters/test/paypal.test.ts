@@ -345,6 +345,9 @@ describe('idempotency', () => {
     const second = await adapter.pay(intent);
     assert.equal(first.externalId, 'BATCH-ORIG');
     assert.equal(second.externalId, 'BATCH-ORIG');
+    assert.equal(receiptMeta(second)?.duplicateSenderBatchId, 'true');
+    assert.equal(receiptMeta(second)?.errorName, 'USER_BUSINESS_ERROR');
+    assert.equal(receiptMeta(second)?.needsManualResolve, undefined);
     const posts = calls.filter((c) => c.method === 'POST' && c.url.includes('/payouts'));
     assert.equal(posts.length, 2);
     assert.equal(successfulPosts, 1);
@@ -375,6 +378,8 @@ describe('idempotency', () => {
     assert.equal(receipt.externalId, '');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.equal(receiptMeta(receipt)?.duplicateSenderBatchId, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+    assert.equal(receiptMeta(receipt)?.errorName, 'USER_BUSINESS_ERROR');
     assert.ok(errors.length > 0);
   });
 
@@ -406,6 +411,7 @@ describe('idempotency', () => {
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, 'BATCH-DUP');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, undefined);
     assert.ok(errors.length > 0);
   });
 
@@ -439,6 +445,9 @@ describe('idempotency', () => {
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, 'BATCH-NET');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.duplicateSenderBatchId, 'true');
+    assert.equal(receiptMeta(receipt)?.errorName, 'USER_BUSINESS_ERROR');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, undefined);
     assert.ok(errors.length > 0);
   });
 });
@@ -475,6 +484,7 @@ describe('outcome rules on POST', () => {
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -493,6 +503,7 @@ describe('outcome rules on POST', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
   });
 
   it('TimeoutError DOMException -> pending', async () => {
@@ -547,6 +558,7 @@ describe('outcome rules on POST', () => {
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -572,6 +584,7 @@ describe('outcome rules on POST', () => {
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -592,6 +605,7 @@ describe('outcome rules on POST', () => {
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
     assert.ok(errors.length > 0);
   });
 });

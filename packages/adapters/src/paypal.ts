@@ -5,6 +5,7 @@ import {
   createPayPalHttp,
   formatAmount,
   parsePayPalError,
+  PayPalApiError,
   type PayPalConfig,
 } from './paypal-client.ts';
 
@@ -99,6 +100,16 @@ function metaFromPayout(
   return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
+function payoutBatchItemCount(body: PayoutCreateResponse | PayoutBatchResponse): number {
+  return body.items?.length ?? 0;
+}
+
+function receiptMismatchMultiItemError(externalId: string, itemCount: number): Error {
+  return new Error(
+    `receipt_mismatch: PayPal batch ${externalId} has ${itemCount} items; this adapter sends exactly one`,
+  );
+}
+
 function receiptFromBatchBody(
   intentId: string,
   body: PayoutCreateResponse | PayoutBatchResponse,
@@ -116,6 +127,32 @@ function receiptFromBatchBody(
     status: mapPayoutStatus(batchStatus, item?.transaction_status),
     at,
     meta: metaFromPayout(batchStatus, item, extraMeta),
+  };
+}
+
+function pendingMultiItemMismatchReceipt(
+  intentId: string,
+  body: PayoutCreateResponse | PayoutBatchResponse,
+  at: string,
+  extraMeta?: Record<string, string>,
+): AdapterReceipt {
+  const batchHeader = body.batch_header;
+  const payoutBatchId = batchHeader?.payout_batch_id ?? '';
+  const batchStatus = batchHeader?.batch_status ?? '';
+  const itemCount = payoutBatchItemCount(body);
+  const item = body.items?.[0];
+  return {
+    intentId,
+    rail: 'paypal',
+    externalId: payoutBatchId,
+    status: 'pending',
+    at,
+    meta: metaFromPayout(batchStatus, item, {
+      ...extraMeta,
+      needsManualResolve: 'true',
+      errorName: 'receipt_mismatch',
+      itemCount: String(itemCount),
+    }),
   };
 }
 
@@ -151,6 +188,32 @@ function isDuplicateSenderBatchError(
   return false;
 }
 
+function paypalErrorNameForMeta(error: unknown): string | undefined {
+  if (error instanceof PayPalApiError) {
+    const n = error.name;
+    if (n !== '' && n !== 'PayPalApiError') {
+      return n;
+    }
+  }
+  return undefined;
+}
+
+function buildPendingUnknownMeta(
+  error: unknown,
+  extraMeta?: Record<string, string>,
+): Record<string, string> {
+  const meta: Record<string, string> = {
+    unknownOutcome: 'true',
+    needsManualResolve: 'true',
+    ...extraMeta,
+  };
+  const fromError = paypalErrorNameForMeta(error);
+  if (fromError !== undefined && meta.errorName === undefined) {
+    meta.errorName = fromError;
+  }
+  return meta;
+}
+
 function extractBatchIdFromDuplicateError(
   parsed: PayPalNamedErrorBody | null,
   bodyText: string,
@@ -171,8 +234,17 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
   const http = createPayPalHttp(config);
   const { nowMs, onError, apiCall } = http;
 
-  async function getPayoutBatch(batchId: string, intentId: string): Promise<AdapterReceipt> {
+  async function getPayoutBatch(
+    batchId: string,
+    intentId: string,
+    extraMeta?: Record<string, string>,
+  ): Promise<AdapterReceipt> {
     const at = new Date(nowMs()).toISOString();
+    const unknownMeta = (more?: Record<string, string>): Record<string, string> => ({
+      unknownOutcome: 'true',
+      ...extraMeta,
+      ...more,
+    });
     let response: Response;
     try {
       response = await apiCall(`/v1/payments/payouts/${batchId}`, { method: 'GET' });
@@ -184,7 +256,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
         externalId: batchId,
         status: 'pending',
         at,
-        meta: { unknownOutcome: 'true' },
+        meta: unknownMeta(),
       };
     }
     if (!response.ok) {
@@ -195,11 +267,19 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
         externalId: batchId,
         status: 'pending',
         at,
-        meta: { unknownOutcome: 'true' },
+        meta: unknownMeta(),
       };
     }
     const body = (await response.json()) as PayoutBatchResponse;
-    return receiptFromBatchBody(intentId, body, at);
+    const itemCount = payoutBatchItemCount(body);
+    if (itemCount >= 2) {
+      const payoutBatchId = body.batch_header?.payout_batch_id ?? batchId;
+      const mismatch = receiptMismatchMultiItemError(payoutBatchId, itemCount);
+      // Do not throw: a failed pay receipt frees the daily limit and could double-pay.
+      onError?.(mismatch, { intentId, op: 'payout' });
+      return pendingMultiItemMismatchReceipt(intentId, body, at, extraMeta);
+    }
+    return receiptFromBatchBody(intentId, body, at, extraMeta);
   }
 
   return {
@@ -224,6 +304,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
         };
       };
 
+      // Never record a duplicate-guess as failed: if it was a real duplicate the first payout may have gone out, and failing it frees the daily limit, so the agent could pay twice. An operator settles these via POST /intents/:id/resolve (planned).
       const pendingUnknown = (
         error: unknown,
         extraMeta?: Record<string, string>,
@@ -235,7 +316,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
           externalId: '',
           status: 'pending',
           at,
-          meta: { unknownOutcome: 'true', ...extraMeta },
+          meta: buildPendingUnknownMeta(error, extraMeta),
         };
       };
 
@@ -291,12 +372,17 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
 
         if (isDuplicateSenderBatchError(payoutResponse.status, bodyText, parsed)) {
           const batchId = extractBatchIdFromDuplicateError(parsed, bodyText);
+          const duplicateMeta: Record<string, string> = { duplicateSenderBatchId: 'true' };
+          const parsedName = parsed?.name;
+          if (parsedName !== undefined && parsedName !== '') {
+            duplicateMeta.errorName = parsedName;
+          }
           if (batchId) {
-            return getPayoutBatch(batchId, intent.id);
+            return getPayoutBatch(batchId, intent.id, duplicateMeta);
           }
           return pendingUnknown(
             parsed ?? new Error('Duplicate sender_batch_id without batch link'),
-            { duplicateSenderBatchId: 'true' },
+            duplicateMeta,
           );
         }
 
@@ -321,6 +407,14 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
       const payoutBatchId = body.batch_header?.payout_batch_id;
       if (payoutBatchId === undefined || payoutBatchId === '') {
         return pendingUnknown(new Error('PayPal payout response missing payout_batch_id'));
+      }
+
+      const itemCount = payoutBatchItemCount(body);
+      if (itemCount >= 2) {
+        const mismatch = receiptMismatchMultiItemError(payoutBatchId, itemCount);
+        // Do not throw: a failed pay receipt frees the daily limit and could double-pay.
+        onError?.(mismatch, { intentId: intent.id, op: 'payout' });
+        return pendingMultiItemMismatchReceipt(intent.id, body, at);
       }
 
       return receiptFromBatchBody(intent.id, body, at);
@@ -362,6 +456,12 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
       }
 
       const batchStatus = body.batch_header?.batch_status ?? '';
+      const itemCount = payoutBatchItemCount(body);
+      if (itemCount >= 2) {
+        const mismatch = receiptMismatchMultiItemError(receipt.externalId, itemCount);
+        onError?.(mismatch, { intentId: receipt.intentId, op: 'status' });
+        throw mismatch;
+      }
       const item = body.items?.[0];
       return {
         intentId: receipt.intentId,

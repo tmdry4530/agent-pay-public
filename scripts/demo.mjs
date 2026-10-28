@@ -11,6 +11,10 @@ const repoRoot = path.resolve(__dirname, '..');
 const API_HOST = '127.0.0.1';
 const API_PORT = Number(process.env.DEMO_API_PORT) || 8787;
 const WEB_PORT = Number(process.env.DEMO_WEB_PORT) || 5173;
+// Rail comes from the shell (default mock). A root .env, if present, is passed to the API for credentials only.
+const RAIL = process.env.RAIL || 'mock';
+const ENV_FILE = path.join(repoRoot, '.env');
+const envFileArgs = fs.existsSync(ENV_FILE) ? [`--env-file=${ENV_FILE}`] : [];
 
 const nodeMajor = Number(process.versions.node.split('.')[0]);
 if (nodeMajor < 24) {
@@ -63,6 +67,7 @@ await checkPortFree(WEB_PORT, 'web');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-pay-demo-'));
 const LEDGER_PATH = path.join(tempDir, 'ledger.json');
 console.log(`fresh ledger: ${LEDGER_PATH}`);
+console.log(`rail: ${RAIL}${envFileArgs.length ? ' (api env file: .env)' : ''}`);
 
 /** @type {import('node:child_process').ChildProcess | null} */
 let apiChild = null;
@@ -172,12 +177,12 @@ process.on('unhandledRejection', (err) => {
 
 apiChild = spawn(
   process.execPath,
-  [path.join('apps', 'api', 'src', 'main.ts')],
+  [...envFileArgs, path.join('apps', 'api', 'src', 'main.ts')],
   {
     cwd: repoRoot,
     env: {
       ...process.env,
-      RAIL: 'mock',
+      RAIL,
       LEDGER_PATH,
       PORT: String(API_PORT),
       HOST: API_HOST,
@@ -287,7 +292,7 @@ if (!webReady) {
 }
 
 console.log(
-  `agent-pay demo ready: ${webUrl}  (api http://${API_HOST}:${API_PORT}, rail=mock, ledger ${LEDGER_PATH})`,
+  `agent-pay demo ready: ${webUrl}  (api http://${API_HOST}:${API_PORT}, rail=${RAIL}, ledger ${LEDGER_PATH})`,
 );
 console.log('Press Ctrl+C to stop.');
 

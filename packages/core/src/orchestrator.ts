@@ -57,17 +57,20 @@ export class PaymentError extends Error {
   }
 }
 
+/** `actor` of history records made by policy evaluation (see DecisionRecord). */
+const POLICY_ACTOR = 'policy';
+
 export interface ApproveOptions {
   policy: Policy;
   ledger: Ledger;
   adapter: PaymentAdapter;
-  /** Who approved; recorded in the decision reason. */
+  /** Who approved; recorded in the decision reason and as the history record's `actor`. */
   approver?: string;
 }
 
 export interface RejectOptions {
   ledger: Ledger;
-  /** Who rejected; recorded in the decision reason. */
+  /** Who rejected; recorded in the decision reason and as the history record's `actor`. */
   approver?: string;
   /** Free-text note appended to the reason. */
   note?: string;
@@ -103,7 +106,7 @@ export async function runPayment(
     throw err;
   }
   const decision = evaluate(policy, intent, await ledger.ledgerStateFor(intent));
-  await ledger.recordDecision(intent.id, decision);
+  await ledger.recordDecision(intent.id, decision, { actor: POLICY_ACTOR });
   if (decision.status !== 'approved') {
     return { intentId: intent.id, status: decision.status, decision };
   }
@@ -132,7 +135,8 @@ export async function approve(intentId: string, options: ApproveOptions): Promis
   );
   if (recheck.status !== 'approved') {
     const decision: Decision = { status: 'rejected', reason: `${recheck.reason} (re-checked on approval by ${by})` };
-    await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval' });
+    // The policy re-check made this decision; the reason names who triggered it.
+    await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval', actor: POLICY_ACTOR });
     return { intentId, status: 'rejected', decision };
   }
   const { amount, currency, payee } = entry.intent;
@@ -141,7 +145,7 @@ export async function approve(intentId: string, options: ApproveOptions): Promis
     reason: `${ReasonCode.ApprovedByHuman}: approved by ${by}; ${amount} ${currency} to "${payee}" is within hard limits`,
   };
   // ifStatus guards against two concurrent approvals both paying.
-  await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval' });
+  await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval', actor: approver });
   return payApproved(entry.intent, decision, ledger, adapter);
 }
 
@@ -154,7 +158,7 @@ export async function reject(intentId: string, options: RejectOptions): Promise<
     status: 'rejected',
     reason: `${ReasonCode.RejectedByHuman}: rejected by ${by}${note ? `; ${note}` : ''}`,
   };
-  await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval' });
+  await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval', actor: approver });
   return { intentId, status: 'rejected', decision };
 }
 

@@ -118,7 +118,7 @@ async function startNearMock(
       }
       if (parsed.method === 'send_tx') {
         sendTxCalls++;
-        send(handlers.sendTx?.() ?? { jsonrpc: '2.0', id: '1', result: { status: { SuccessValue: '' } } });
+        send(handlers.sendTx?.() ?? { jsonrpc: '2.0', id: '1', result: { final_execution_status: 'FINAL', status: { SuccessValue: '' } } });
         return;
       }
       if (parsed.method === 'tx') {
@@ -130,7 +130,7 @@ async function startNearMock(
           handlers.txStatus?.({ tx_hash: txHash, sender_account_id: lastTxSender ?? '' }) ?? {
             jsonrpc: '2.0',
             id: '1',
-            result: { status: { SuccessValue: '' } },
+            result: { final_execution_status: 'FINAL', status: { SuccessValue: '' } },
           },
         );
         return;
@@ -303,7 +303,7 @@ test('NEAR: send_tx timeout → replay → refresh succeeded', async (t) => {
     txStatus: () => ({
       jsonrpc: '2.0',
       id: '1',
-      result: { status: { SuccessValue: '' } },
+      result: { final_execution_status: 'FINAL', status: { SuccessValue: '' } },
     }),
   });
   const env = {

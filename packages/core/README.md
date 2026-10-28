@@ -13,6 +13,7 @@ npm run typecheck      # tsc --noEmit
 - `PaymentIntent {id, agentId, payee, amount, currency, purpose, createdAt}`: `amount` is in major units; `createdAt` is ISO 8601.
 - `Policy {agentId, perTxMax, dailyMax, allowedPayees, requireApprovalAbove, currency?}`
 - `Decision {status: 'approved'|'rejected'|'needs_approval', reason}`: `reason` = `"<code>: <detail>"`; `reasonCode(decision)` extracts the code.
+- `DecisionRecord = Decision & {at?, actor?}`: one element of `LedgerEntry.decisions` (see Ledger below).
 - `Receipt {intentId, rail: 'mock'|'paypal'|'near', externalId, status: 'succeeded'|'pending'|'failed'|'refunded', at}`
 - `LedgerState {dailyTotal}`: what `evaluate` needs from the ledger.
 
@@ -80,8 +81,8 @@ if (r.status === 'needs_approval') {
   `approved_by_human: approved by "<approver>"; …` and the pay/receipt steps run as in `runPayment`.
 - **`reject(intentId, {ledger, approver?, note?})`** turns a `needs_approval` intent into `rejected_by_human: …`.
   It throws the same errors as `approve`.
-- Both replace the decision with `recordDecision(id, d, { ifStatus: 'needs_approval' })`, so of two concurrent
-  approvals on one Ledger instance, only one pays. The single-writer-per-file rule still applies.
+- Both record the new decision with `recordDecision(id, d, { ifStatus: 'needs_approval', actor: approver })`, so of
+  two concurrent approvals on one Ledger instance, only one pays (and only one decision is appended). The single-writer-per-file rule still applies.
 
 ## `Ledger`
 ```ts
@@ -97,6 +98,14 @@ if (decision.status === 'approved') {
 ```
 - File: `{ version: 1, entries: LedgerEntry[] }`. The file and its parent dirs are created when missing.
   An unknown format throws and is not overwritten.
+- **Decision history:** `entry.decision` is the latest decision; `entry.decisions` lists every decision, oldest
+  first, as `{status, reason, at, actor?}`. `at` is the ledger clock's ISO time. `actor` is `'policy'` for
+  `runPayment`'s evaluation and for the re-check on approval, or the approver name for `approve`/`reject`
+  (omitted when no name is given; pass `{ actor }` to `recordDecision` yourself). A `needs_approval` → human flow
+  ends with two records. Replays, `recordPayment`, `recordReceipt`, `settleReceipt`, `reconcile` and a failed
+  `ifStatus` check append nothing. Files written before this field existed are read with
+  `decisions = [decision]` (no `at`/`actor`) or `[]` when undecided; reads never rewrite the file, and the next
+  write stores the new shape.
 - Order is enforced: decision needs an intent; payment needs an `approved` decision and no earlier payment;
   receipt needs a recorded payment and a matching `intentId`. A decision can be replaced until payment is
   recorded (e.g. `needs_approval` → `approved` after a human approves). Pass `{ ifStatus }` as the third argument

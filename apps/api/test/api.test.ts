@@ -284,6 +284,40 @@ test('GET /ledger entries and today totals', async (t) => {
   assert.deepEqual(ledger.today, { day: '2026-10-28', totals: { 'demo-agent': 15 } });
 });
 
+test('GET /ledger includes each entry\'s decision history', async (t) => {
+  const { base } = await startTestServer(t);
+  const post = (path: string, body: unknown) =>
+    fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  assert.equal((await post('/intents', baseIntent({ amount: 10, id: 'pi_auto' }))).status, 201);
+  assert.equal((await post('/intents', baseIntent({ amount: 80, id: 'pi_ok' }))).status, 201);
+  assert.equal((await post('/intents/pi_ok/approve', { approver: 'alice' })).status, 200);
+  assert.equal((await post('/intents', baseIntent({ amount: 80, id: 'pi_no' }))).status, 201);
+  assert.equal((await post('/intents/pi_no/reject', { approver: 'bob' })).status, 200);
+
+  const res = await fetch(`${base}/ledger`);
+  assert.equal(res.status, 200);
+  type Rec = { status: string; reason: string; at?: string; actor?: string };
+  const body = (await res.json()) as { entries: { intent: { id: string }; decision: Rec; decisions: Rec[] }[] };
+  const byId = new Map(body.entries.map((e) => [e.intent.id, e]));
+  const summary = (id: string) =>
+    byId.get(id)!.decisions.map((d) => `${d.status}/${d.reason.split(':')[0]}/${d.actor}@${d.at}`);
+  const at = FIXED_NOW.toISOString();
+
+  assert.deepEqual(summary('pi_auto'), [`approved/within_policy/policy@${at}`]);
+  assert.deepEqual(summary('pi_ok'), [
+    `needs_approval/approval_required/policy@${at}`,
+    `approved/approved_by_human/alice@${at}`,
+  ]);
+  assert.deepEqual(summary('pi_no'), [
+    `needs_approval/approval_required/policy@${at}`,
+    `rejected/rejected_by_human/bob@${at}`,
+  ]);
+  // entry.decision is still the latest decision, in its original shape.
+  assert.deepEqual(Object.keys(byId.get('pi_ok')!.decision).sort(), ['reason', 'status']);
+  assert.equal(byId.get('pi_ok')!.decision.reason, byId.get('pi_ok')!.decisions.at(-1)!.reason);
+});
+
 test('GET and PUT /policy', async (t) => {
   const { base } = await startTestServer(t);
 
