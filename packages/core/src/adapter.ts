@@ -13,5 +13,10 @@ import type { PaymentIntent, Rail, Receipt } from './types.ts';
 export interface PaymentAdapter {
   readonly rail: Rail;
   pay(intent: PaymentIntent): Promise<Receipt>;
+  /**
+   * Resolves with the rail's current view of that receipt (same intentId and rail;
+   * status `succeeded` | `pending` | `failed`).
+   */
+  status?(receipt: Receipt): Promise<Receipt>;
   refund?(receipt: Receipt): Promise<Receipt>;
 }

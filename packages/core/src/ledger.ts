@@ -150,8 +150,38 @@ export class Ledger {
   }
 
   /**
+   * Settles a pending receipt (compare-and-set). Requires `paymentStatus === 'paid'`
+   * and the current receipt status `pending`. Replaces the receipt; when the new
+   * status is `failed`, also sets `paymentStatus` to `failed` (same as payApproved).
+   * Throws LedgerError on mismatch or if the receipt is not pending.
+   */
+  settleReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry> {
+    return this.#mutate((file) => {
+      const entry = find(file, intentId);
+      if (receipt.intentId !== intentId) {
+        throw new LedgerError(`receipt intentId ${receipt.intentId} does not match ${intentId}`);
+      }
+      if (entry.paymentStatus !== 'paid') {
+        throw new LedgerError(
+          `intent ${intentId} cannot settle receipt: payment status is ${entry.paymentStatus ?? 'missing'}`,
+        );
+      }
+      if (entry.receipt?.status !== 'pending') {
+        throw new LedgerError(
+          `intent ${intentId} receipt is not pending (status is ${entry.receipt?.status ?? 'missing'})`,
+        );
+      }
+      entry.receipt = { ...receipt };
+      if (receipt.status === 'failed') entry.paymentStatus = 'failed';
+      entry.updatedAt = this.#now().toISOString();
+      return entry;
+    });
+  }
+
+  /**
    * Attaches a receipt. Requires a recorded payment. May be called again to
-   * replace the receipt (e.g. pending -> succeeded, or a refund receipt).
+   * replace the receipt (e.g. a refund receipt). Pending receipts should be
+   * settled via `settleReceipt` so concurrent updates are guarded.
    */
   recordReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry> {
     return this.#mutate((file) => {

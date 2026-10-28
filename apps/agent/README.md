@@ -47,6 +47,15 @@ seed policy (`demo-agent`: perTxMax 100, dailyMax 200, approval above 50, USD).
 | `over-limit` | buy 15M tokens of GPT inference | 150 USD → openai-api | rejected, `per_tx_limit_exceeded` |
 | `needs-approval` | buy 7.5M tokens of GPT inference | 75 USD → openai-api | `needs_approval` → human approves → paid |
 
+When `POST /intents` or `/approve` returns `paid` with a **pending** receipt (or the approval poll sees the same), the agent
+enters **`await_receipt`**: it calls `POST /intents/:id/refresh` every `--poll-ms` until the receipt is `succeeded`
+(→ `paid`, exit 0) or `failed` (→ `failed`, exit 1), or `--timeout-ms` elapses, measured from the start of the receipt
+wait (→ `receipt_pending`, exit 3). A **`refresh`** step (`from`, `to`, `receiptStatus`) is emitted only when the receipt
+status changes. `409 receipt_not_pending` (settled elsewhere, e.g. by `reconcile`) → read `GET /ledger` and finish from
+it; `409 no_receipt` / `status_unsupported` → finish `receipt_pending` at once; `5xx` (e.g. `502 status_check_failed`)
+or network errors are retried until the timeout, with one `refresh` step per distinct error; other `4xx` → `error`
+(exit 1). The default mock rail always returns `succeeded`, so this path only runs on rails that return `pending`.
+
 Paid amounts count toward the 200 USD daily max, so on one ledger the third `needs-approval` run of a UTC
 day is rejected with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
 
@@ -56,7 +65,7 @@ day is rejected with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
 |---|---|---|
 | 0 | `paid` | Payment went through |
 | 2 | `rejected` | Rejected by policy or by a human |
-| 3 | `approval_timeout` | Still `needs_approval` after `--timeout-ms` (the intent stays pending in the ledger) |
+| 3 | `approval_timeout` / `receipt_pending` | Still `needs_approval` after `--timeout-ms`, or receipt still `pending` after the receipt wait |
 | 1 | `failed` / `error` | Payment failed on the rail, or the agent could not finish: bad arguments, planner error, API down, HTTP error |
 
 ## Human output
@@ -83,7 +92,7 @@ Argument errors caught before the run starts go to stderr only (exit 1, no NDJSO
 // step event
 { "type": "step", "step": "<step>", "ts": "<ISO 8601>", "message": "<human text>", "intentId": "pi_…" /* once known */, ... }
 // final line
-{ "type": "summary", "ts": "…", "status": "paid|rejected|approval_timeout|failed|error", "exitCode": 0,
+{ "type": "summary", "ts": "…", "status": "paid|rejected|approval_timeout|receipt_pending|failed|error", "exitCode": 0,
   "task": "…", "scenario": "small" /* if used */, "quote": { "payee", "amount", "currency", "purpose" },
   "intentId": "pi_…", "receipt": { "intentId", "rail", "externalId", "status", "at" } /* if any */,
   "reason": "<code>: <detail>" /* policy or human decision */, "error": "…" /* status error only */ }
@@ -99,6 +108,8 @@ Argument errors caught before the run starts go to stderr only (exit 1, no NDJSO
 | `auto_approve` | `approver` |
 | `approve_result` | `apiStatus` or `httpStatus` (409 when someone else decided first) |
 | `poll` | `ledgerStatus` (`pending`/`paid`/`rejected`/`failed`); emitted only when it changes |
+| `await_receipt` | `timeoutMs`, `pollMs` |
+| `refresh` | `from`, `to`, `receiptStatus`; optional `error`, `httpStatus` on retryable failures |
 | `error` | `httpStatus` for HTTP errors |
 
 Absent fields are omitted. In-process callers get the same events through `runAgent(options, { emit })`.

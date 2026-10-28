@@ -21,7 +21,7 @@ Options:
   --json                   NDJSON on stdout: one {"type":"step"} per step, last line {"type":"summary"}
   --help                   Show this help
 
-Exit codes: 0 paid, 2 rejected, 3 approval timeout, 1 error/failed
+Exit codes: 0 paid, 2 rejected, 3 approval timeout / receipt still pending, 1 error/failed
 `;
 
 async function main(): Promise<void> {
