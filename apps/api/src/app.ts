@@ -6,6 +6,7 @@ import {
   approve,
   countsTowardDailyTotal,
   reject,
+  refreshIntent,
   runPayment,
   utcDay,
   type PaymentAdapter,
@@ -55,6 +56,10 @@ const PAYMENT_ERROR_STATUS: Record<PaymentErrorCode, number> = {
   not_pending: 409,
   in_progress: 409,
   intent_conflict: 409,
+  no_receipt: 409,
+  receipt_not_pending: 409,
+  status_unsupported: 409,
+  status_check_failed: 502,
 };
 
 const ORIGIN_RE = /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
@@ -105,6 +110,15 @@ export function createApp(options: AppOptions) {
         POST: async (req, [id]) => {
           const { approver, note } = parseDecisionBody(await readJson(req), true);
           return { status: 200, body: await reject(id!, { ledger, approver, note }) };
+        },
+      },
+    },
+    {
+      pattern: /^\/intents\/([^/]+)\/refresh$/,
+      methods: {
+        POST: async (req, [id]) => {
+          await readJson(req);
+          return { status: 200, body: await refreshIntent(id!, ledger, adapter) };
         },
       },
     },

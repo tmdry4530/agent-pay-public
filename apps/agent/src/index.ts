@@ -13,4 +13,4 @@ export { PRICE_TABLE, PlannerError, RuleBasedPlanner, createPlanner, parseQuanti
 export type { Planner, PlannerContext, PlannerKind, PriceRule, Quote } from './planner.ts';
 export { SCENARIOS, SCENARIO_NAMES, isScenarioName } from './scenarios.ts';
 export type { ScenarioName } from './scenarios.ts';
-export { ApiClientError, REQUEST_TIMEOUT_MS, getLedger, postApprove, postIntent } from './client.ts';
+export { ApiClientError, REQUEST_TIMEOUT_MS, getLedger, postApprove, postIntent, postRefresh } from './client.ts';

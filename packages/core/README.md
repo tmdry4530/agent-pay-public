@@ -40,11 +40,13 @@ Keep amounts to ≤ 2 decimals, or use whole minor units throughout.
 interface PaymentAdapter {
   readonly rail: 'mock' | 'paypal' | 'near';
   pay(intent: PaymentIntent): Promise<Receipt>;
+  status?(receipt: Receipt): Promise<Receipt>; // optional: poll the rail for pending receipts
   refund?(receipt: Receipt): Promise<Receipt>;
 }
 ```
 - Call `pay` only for an `approved` decision. Return a `Receipt` with `intentId === intent.id` and `rail === adapter.rail`.
 - If the rail declines the payment, resolve with `status: 'failed'`. Throw only for unexpected errors.
+- `status` resolves with the rail's current view of that receipt (same `intentId` and `rail`; status `succeeded` | `pending` | `failed`). Used by `reconcile` / `refreshIntent`.
 - `refund` resolves with a new receipt (`status: 'refunded'`).
 
 ## Orchestrator: `runPayment`, `approve`, `reject`
@@ -98,8 +100,9 @@ if (decision.status === 'approved') {
 - Order is enforced: decision needs an intent; payment needs an `approved` decision and no earlier payment;
   receipt needs a recorded payment and a matching `intentId`. A decision can be replaced until payment is
   recorded (e.g. `needs_approval` → `approved` after a human approves). Pass `{ ifStatus }` as the third argument
-  to `recordDecision` to make the replacement conditional on the current status. Receipts can be replaced
-  (e.g. pending → succeeded, or a refund receipt).
+  to `recordDecision` to make the replacement conditional on the current status. Pending receipts are settled with
+  `settleReceipt` (compare-and-set on `receipt.status === 'pending'`); other receipt replacements use `recordReceipt`
+  (e.g. a refund receipt).
 - **Daily totals:** grouped by the **UTC** date of `intent.createdAt`, not the record time and not KST.
   For example, 08:30 KST on 10/29 counts toward 10/28 UTC. `dailyTotal(agentId, day?)` takes a
   `Date`, an ISO string or `YYYY-MM-DD`. The default day is today in UTC from the injected `now`.
@@ -112,3 +115,16 @@ if (decision.status === 'approved') {
 - **Writes:** atomic (a temp file `<file>.<pid>.<ts>.<rand>.tmp` in the same directory, then `rename`).
   One instance runs its operations in order. Each operation re-reads the file. There is **no
   cross-process lock**, so use only one writer process per ledger file.
+
+## Reconciliation: `reconcile`, `refreshIntent`
+```ts
+const summary = await reconcile(ledger, adapter);
+// { rail, supported, checked, updated: [{intentId, from, to}], unchanged, errors: [{intentId, error}] }
+const r = await refreshIntent(intentId, ledger, adapter);
+// PaymentResult & { changed: boolean }
+```
+- If `adapter.status` is missing, `reconcile` returns `supported: false` and does not call the adapter.
+- Otherwise every entry with `paymentStatus === 'paid'`, `receipt.status === 'pending'`, and `receipt.rail === adapter.rail` is checked via `adapter.status`. Still `pending` → no write (`unchanged++`). `succeeded` or `failed` → `ledger.settleReceipt` (failed also sets `paymentStatus` to `failed`).
+- **Totals:** `pending` and `succeeded` receipts count toward the daily total; a receipt settled as `failed` (with `paymentStatus: 'failed'`) no longer counts, so its amount is freed for the rest of the UTC day. A replay of that intent through `runPayment` reports `failed`.
+- Invalid receipts (wrong `intentId`/`rail`, or a status other than `succeeded`/`pending`/`failed`) or adapter errors become `errors[]` items (`receipt_mismatch: …` / `adapter_error: …`; a lost compare-and-set is `ledger_conflict: …`) and nothing is stored; one bad entry does not stop the batch. A second run after all receipts settle is a no-op (ledger file byte-identical).
+- **`refreshIntent`** throws `PaymentError`: `intent_not_found`, `no_receipt`, `receipt_not_pending` (already settled), `status_unsupported`, `status_check_failed`. On a failed rail status the result is `status: 'failed'` with `payment_declined: … on status check`.
