@@ -1,6 +1,7 @@
 export type {
   Currency,
   Decision,
+  DecisionRecord,
   DecisionStatus,
   LedgerState,
   PaymentIntent,
