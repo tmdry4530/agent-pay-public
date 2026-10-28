@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError } from '../apiError';
+import { ApiError, apiErrorCode } from '../apiError';
 import { createHttpClient } from '../httpClient';
 
 describe('createHttpClient', () => {
@@ -124,5 +124,73 @@ describe('createHttpClient', () => {
     });
     const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
     await expect(client.getPolicy()).rejects.toEqual(new ApiError(400, 'invalid_body: bad field'));
+  });
+
+  describe('POST /intents/:id/refresh', () => {
+    const base = 'http://127.0.0.1:8787';
+    const intentId = 'pi/refresh';
+
+    it('200 changed=true', async () => {
+      const body = {
+        intentId,
+        status: 'paid',
+        changed: true,
+        decision: { status: 'approved', reason: 'within_policy: ok' },
+        receipt: {
+          intentId,
+          rail: 'mock',
+          externalId: 'mock_x',
+          status: 'succeeded',
+          at: '2026-01-01T00:00:00.000Z',
+        },
+      };
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      await expect(client.refresh(intentId)).resolves.toEqual(body);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${base}/intents/pi%2Frefresh/refresh`,
+        expect.objectContaining({ method: 'POST', body: '{}' }),
+      );
+    });
+
+    it('200 changed=false', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          intentId: 'a',
+          status: 'paid',
+          changed: false,
+          decision: { status: 'approved', reason: 'x: y' },
+          receipt: { intentId: 'a', rail: 'mock', externalId: 'm', status: 'pending', at: '2026-01-01T00:00:00.000Z' },
+        }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      const out = await client.refresh('a');
+      expect(out.changed).toBe(false);
+    });
+
+    it.each([
+      [404, 'intent_not_found: intent x is not recorded'],
+      [409, 'no_receipt: intent x has no receipt stored'],
+      [409, 'receipt_not_pending: intent x receipt status is succeeded, not pending'],
+      [409, 'status_unsupported: status check is not supported for intent x on rail mock'],
+      [502, 'status_check_failed: adapter_error: boom'],
+    ] as const)('error %i %s', async (status, error) => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status,
+        statusText: 'Err',
+        json: async () => ({ error }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      let caught: unknown;
+      try {
+        await client.refresh(intentId);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toEqual(new ApiError(status, error));
+      expect(apiErrorCode(caught)).toBe(error.slice(0, error.indexOf(':')));
+    });
   });
 });

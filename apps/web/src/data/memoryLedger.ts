@@ -113,6 +113,29 @@ export class MemoryLedger {
     });
   }
 
+  settleReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry> {
+    return this.#mutate((entries) => {
+      const entry = find(entries, intentId);
+      if (receipt.intentId !== intentId) {
+        throw new MemoryLedgerError(`receipt intentId ${receipt.intentId} does not match ${intentId}`);
+      }
+      if (entry.paymentStatus !== 'paid') {
+        throw new MemoryLedgerError(
+          `intent ${intentId} cannot settle receipt: payment status is ${entry.paymentStatus ?? 'missing'}`,
+        );
+      }
+      if (entry.receipt?.status !== 'pending') {
+        throw new MemoryLedgerError(
+          `intent ${intentId} receipt is not pending (status is ${entry.receipt?.status ?? 'missing'})`,
+        );
+      }
+      entry.receipt = { ...receipt };
+      if (receipt.status === 'failed') entry.paymentStatus = 'failed';
+      entry.updatedAt = this.#now().toISOString();
+      return entry;
+    });
+  }
+
   async dailyTotal(agentId: string, day?: Date | string): Promise<number> {
     const target =
       day === undefined ? utcDay(this.#now()) : typeof day === 'string' && DAY_RE.test(day) ? day : utcDay(day);
