@@ -20,8 +20,7 @@ export interface LedgerEntry {
   /**
    * Every decision recorded for this intent, oldest first, e.g. needs_approval then the
    * human's approval or rejection. Ledger always sets it (`[]` before the first decision;
-   * filled on read for older files). Optional in the type only so other LedgerEntry
-   * producers that predate it (the web app's in-memory ledger) still type-check.
+   * filled on read for older files).
    */
   decisions: DecisionRecord[];
   paymentStatus?: PaymentStatus;
