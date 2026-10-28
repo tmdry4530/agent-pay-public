@@ -5,7 +5,25 @@ Single-screen Vite + React demo for **agent-pay**: an AI agent pays on behalf of
 ## Requirements
 
 - Node.js 18+
-- [pnpm](https://pnpm.io/)
+- [pnpm](https://pnpm.io/) 11.28.5 (pinned via `packageManager` in `package.json`)
+
+### Corepack
+
+`packageManager` pins pnpm to `11.28.5` so Corepack does not pull a newer major (e.g. pnpm 12). Corepack's
+default cache path can fail with `EACCES`, so point it at a user-writable directory before installing:
+
+```bash
+export COREPACK_HOME="$HOME/.cache/node/corepack"
+npm run web:install          # from the repo root (pnpm -C apps/web install --frozen-lockfile)
+pnpm -C apps/web --version   # expect 11.28.5 when pnpm is resolved through Corepack
+```
+
+Corepack picks the pnpm version from the `package.json` in the **current directory**, not the `-C` target. The
+root `package.json` has no `packageManager`, so running the Corepack `pnpm` shim from the repo root (e.g.
+`pnpm -C apps/web ...`) falls back to Corepack's last-known-good pnpm (possibly 12.x) and fails with
+`ERR_PNPM_BAD_PM_VERSION`. Either run Corepack from this directory (`cd apps/web && pnpm --version`) or put a
+standalone pnpm 11.28.5 ahead of the Corepack shim on `PATH` (e.g. `~/.local/bin/pnpm`). Check `command -v pnpm`
+to see which one you get.
 
 ## Setup & scripts
 

@@ -13,9 +13,11 @@
   "scripts": {
     "demo": "node scripts/demo.mjs",
     "demo:record": "node scripts/record-demo.mjs",
-    "test": "npm test --workspaces --if-present && pnpm -C apps/web test",
-    "typecheck": "npm run typecheck --workspaces --if-present && pnpm -C apps/web typecheck",
-    "web:install": "pnpm -C apps/web install --frozen-lockfile"
+    "demo:submission": "node scripts/record-submission.mjs",
+    "test": "npm test --workspaces --if-present && cd apps/web && pnpm test",
+    "typecheck": "npm run typecheck --workspaces --if-present && cd apps/web && pnpm typecheck",
+    "web:install": "cd apps/web && pnpm install --frozen-lockfile",
+    "agent": "npm run -s agent -w @agent-pay/agent --"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
