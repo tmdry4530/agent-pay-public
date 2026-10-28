@@ -32,5 +32,6 @@ export interface AgentPayClient {
     opts?: { approver?: string; note?: string },
   ): Promise<PaymentResult>;
   getLedger(): Promise<LedgerSnapshot>;
+  getHealth?(): Promise<{ ok: boolean; rail: string }>;
   reset?(): Promise<void>;
 }

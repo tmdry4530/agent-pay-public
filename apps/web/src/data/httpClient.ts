@@ -30,14 +30,25 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
   const fetchFn = options.fetch ?? fetch;
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetchFn(`${base}${path}`, {
-      ...init,
-      headers: {
-        Accept: 'application/json',
-        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-        ...init?.headers,
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetchFn(`${base}${path}`, {
+        ...init,
+        headers: {
+          Accept: 'application/json',
+          ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+          ...init?.headers,
+        },
+      });
+    } catch (e) {
+      if (e instanceof TypeError) {
+        throw new ApiError(
+          0,
+          `network_error: cannot reach API at ${base} (${e.message})`,
+        );
+      }
+      throw e;
+    }
     if (!res.ok) {
       throw new ApiError(res.status, await readError(res));
     }
@@ -88,6 +99,10 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
 
     getLedger(): Promise<LedgerSnapshot> {
       return request<LedgerSnapshot>('/ledger');
+    },
+
+    getHealth(): Promise<{ ok: boolean; rail: string }> {
+      return request<{ ok: boolean; rail: string }>('/health');
     },
   };
 }

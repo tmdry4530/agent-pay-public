@@ -67,13 +67,22 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
   return events.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 }
 
+function approverFromReason(decisionReason: string): string | null {
+  const approved = decisionReason.match(/approved by "([^"]+)"/);
+  if (approved) return approved[1]!;
+  const rejected = decisionReason.match(/rejected by "([^"]+)"/);
+  if (rejected) return rejected[1]!;
+  return null;
+}
+
 export function humanOutcomeText(decisionReason: string, approver = 'demo-operator'): string | null {
   const code = reasonCode({ status: 'approved', reason: decisionReason });
+  const who = approverFromReason(decisionReason) ?? approver;
   if (code === ReasonCode.ApprovedByHuman) {
-    return `Approved by human (${approver})`;
+    return `Approved by human (${who})`;
   }
   if (code === ReasonCode.RejectedByHuman) {
-    return `Rejected by human (${approver})`;
+    return `Rejected by human (${who})`;
   }
   return null;
 }

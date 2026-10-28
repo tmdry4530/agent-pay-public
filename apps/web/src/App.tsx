@@ -97,6 +97,7 @@ export default function App() {
   const [step, setStep] = useState<PipelineStep>('task');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [serverRail, setServerRail] = useState<string | null>(null);
   const stepperRef = useRef<HTMLOListElement>(null);
 
   const refreshLedger = useCallback(async () => {
@@ -112,6 +113,20 @@ export default function App() {
     void refreshPolicy();
     void refreshLedger();
   }, [refreshPolicy, refreshLedger]);
+
+  useEffect(() => {
+    if (client.kind !== 'http' || client.getHealth === undefined) return;
+    void (async () => {
+      try {
+        const health = await client.getHealth();
+        setServerRail(health.rail);
+      } catch (e) {
+        setError(
+          e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Health check failed',
+        );
+      }
+    })();
+  }, [client]);
 
   const currency = policy?.currency ?? 'USD';
   const agentId = policy?.agentId ?? 'demo-agent';
@@ -330,21 +345,27 @@ export default function App() {
           )}
 
           <div className="rail-toggle" role="group" aria-label="Payment rail">
-            {(['mock', 'paypal', 'near'] as const).map((r) => (
-              <button
-                key={r}
-                type="button"
-                className={`rail-btn${rail === r ? ' is-active' : ''}`}
-                data-testid={`rail-${r}`}
-                disabled={busy || !!result}
-                onClick={() => setRail(r)}
-              >
-                {r === 'mock' ? 'Mock' : r === 'paypal' ? 'PayPal' : 'NEAR'}
-              </button>
-            ))}
+            {(['mock', 'paypal', 'near'] as const).map((r) => {
+              const isHttp = client.kind === 'http';
+              const isActive = isHttp ? serverRail === r : rail === r;
+              return (
+                <button
+                  key={r}
+                  type="button"
+                  className={`rail-btn${isActive ? ' is-active' : ''}`}
+                  data-testid={`rail-${r}`}
+                  disabled={busy || !!result || isHttp}
+                  onClick={() => setRail(r)}
+                >
+                  {r === 'mock' ? 'Mock' : r === 'paypal' ? 'PayPal' : 'NEAR'}
+                </button>
+              );
+            })}
           </div>
-          {client.kind === 'http' && (
-            <p className="hint rail-note">Rail is selected by the API server.</p>
+          {client.kind === 'http' && serverRail !== null && (
+            <p className="hint rail-note">
+              Rail is selected by the API server: {serverRail}
+            </p>
           )}
 
           <div className="actions">

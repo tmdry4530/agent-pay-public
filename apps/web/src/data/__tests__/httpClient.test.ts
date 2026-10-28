@@ -94,6 +94,27 @@ describe('createHttpClient', () => {
     expect(fetchMock.mock.calls[1]![0]).toBe('http://127.0.0.1:8787/policy');
   });
 
+  it('wraps fetch TypeError as ApiError status 0', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
+    await expect(client.getPolicy()).rejects.toEqual(
+      new ApiError(0, 'network_error: cannot reach API at http://127.0.0.1:8787 (Failed to fetch)'),
+    );
+  });
+
+  it('GET /health returns ok and rail', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, rail: 'near' }),
+    });
+    const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
+    await expect(client.getHealth!()).resolves.toEqual({ ok: true, rail: 'near' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8787/health',
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: 'application/json' }) }),
+    );
+  });
+
   it('throws ApiError with body.error on 4xx', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,

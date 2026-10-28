@@ -93,6 +93,10 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
       return ledgerSnapshot();
     },
 
+    async getHealth() {
+      return { ok: true, rail: 'mock' };
+    },
+
     async reset() {
       ledger.clear();
       railsByIntent.clear();
