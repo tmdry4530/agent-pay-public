@@ -1,5 +1,5 @@
 import type { LedgerEntry, PaymentResult, Receipt } from '@agent-pay/core';
-import { ApiClientError, getHealth, getLedger, postApprove, postIntent, postRefresh } from './client.ts';
+import { ApiClientError, getHealth, getLedger, getRail, postApprove, postIntent, postRefresh, type RailInfo } from './client.ts';
 import { createPlanner, type Planner, type Quote } from './planner.ts';
 import { SCENARIOS, isScenarioName, type ScenarioName } from './scenarios.ts';
 
@@ -11,6 +11,7 @@ export type AgentStep =
   | 'health'
   | 'task'
   | 'quote'
+  | 'rail'
   | 'submit_intent'
   | 'intent_result'
   | 'await_approval'
@@ -230,15 +231,25 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
   };
 
   // 0. Health: fail fast if the API is down, and show (or check) the server's rail.
+  //    GET /rail is fetched once here and reused for the payee/amount mapping below, so the displayed rail,
+  //    the --rail check and the mapping all come from the same server answer (one source of truth).
+  let railInfo: RailInfo | undefined;
+  let railInfoFetched = false;
   if (options.healthCheck !== false) {
     const apiUrl = options.apiUrl.replace(/\/+$/, '');
-    let rail: string;
+    let healthRail: string | undefined;
     try {
       const health = await getHealth(apiUrl);
-      rail = typeof health.rail === 'string' && health.rail !== '' ? health.rail : 'unknown';
+      healthRail = typeof health.rail === 'string' && health.rail !== '' ? health.rail : undefined;
     } catch (err) {
       return fail(err);
     }
+    railInfo = await getRail(apiUrl); // best-effort: undefined on servers without /rail
+    railInfoFetched = true;
+    if (railInfo && healthRail !== undefined && railInfo.rail !== healthRail) {
+      return fail(new Error(`rail_inconsistent: GET /health reports rail=${healthRail} but GET /rail reports rail=${railInfo.rail}`));
+    }
+    const rail = railInfo?.rail ?? healthRail ?? 'unknown';
     const expectedRail = options.expectedRail;
     step('health', `server: ${apiUrl} rail=${rail}`, {
       apiUrl,
@@ -273,13 +284,55 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
     quote,
   });
 
+  let payee = quote.payee;
+  let currency = quote.currency;
+  let amount = quote.amount;
+  try {
+    if (!railInfoFetched) railInfo = await getRail(options.apiUrl); // health check skipped: fetch once now
+    if (railInfo) {
+      const mappedPayee = railInfo.payees[quote.payee] ?? quote.payee;
+      payee = mappedPayee;
+      currency = railInfo.currency;
+      if (railInfo.amountScale !== 1) {
+        amount = Math.round(quote.amount * railInfo.amountScale * 1e6) / 1e6;
+      }
+      const mappingChanged =
+        mappedPayee !== quote.payee ||
+        currency.toUpperCase() !== quote.currency.toUpperCase() ||
+        amount !== quote.amount;
+      if (mappingChanged) {
+        step(
+          'rail',
+          `mapped payee ${quote.payee} → ${payee}, ${quote.amount} ${quote.currency} → ${amount} ${currency}`,
+          {
+            logicalPayee: quote.payee,
+            payee,
+            quoteAmount: quote.amount,
+            quoteCurrency: quote.currency,
+            amount,
+            currency,
+            amountScale: railInfo.amountScale,
+          },
+        );
+      }
+    }
+  } catch (err) {
+    return fail(err);
+  }
+
   // 2. Submit the intent.
   let created: Awaited<ReturnType<typeof postIntent>>;
   try {
     step('submit_intent', `POST ${options.apiUrl.replace(/\/+$/, '')}/intents as ${options.agentId}`, {
       agentId: options.agentId,
     });
-    created = await postIntent(options.apiUrl, { agentId: options.agentId, ...quote });
+    created = await postIntent(options.apiUrl, {
+      agentId: options.agentId,
+      payee,
+      amount,
+      currency,
+      purpose: quote.purpose,
+    });
   } catch (err) {
     return fail(err);
   }

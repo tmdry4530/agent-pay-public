@@ -141,3 +141,42 @@ export async function getHealth(apiUrl: string, timeoutMs: number = HEALTH_TIMEO
   }
   return body !== null && typeof body === 'object' ? (body as HealthResponse) : {};
 }
+
+export interface RailInfo {
+  rail: string;
+  currency: string;
+  amountScale: number;
+  payees: Record<string, string>;
+}
+
+function isRailInfo(body: unknown): body is RailInfo {
+  if (body === null || typeof body !== 'object') return false;
+  const o = body as Record<string, unknown>;
+  if (typeof o.rail !== 'string' || typeof o.currency !== 'string' || typeof o.amountScale !== 'number') {
+    return false;
+  }
+  if (o.payees === null || typeof o.payees !== 'object' || Array.isArray(o.payees)) return false;
+  return Object.values(o.payees as Record<string, unknown>).every((v) => typeof v === 'string');
+}
+
+/**
+ * Best-effort GET /rail for demo payee mapping. Returns undefined on 404, network failure,
+ * non-OK HTTP, invalid JSON, or a 200 body that is not a well-formed RailInfo (agent keeps quote defaults).
+ */
+export async function getRail(apiUrl: string): Promise<RailInfo | undefined> {
+  let res: Response;
+  try {
+    res = await fetch(`${trimBase(apiUrl)}/rail`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch {
+    return undefined;
+  }
+  if (res.status === 404) return undefined;
+  let body: unknown;
+  try {
+    body = await readJson(res);
+  } catch {
+    return undefined;
+  }
+  if (!res.ok) return undefined;
+  return isRailInfo(body) ? body : undefined;
+}

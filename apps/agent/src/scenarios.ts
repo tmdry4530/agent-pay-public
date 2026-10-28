@@ -1,6 +1,7 @@
 /**
  * Built-in demo scenarios. Each is a task string run through the RuleBasedPlanner, sized against the seed
- * policy (demo-agent: perTxMax 100, dailyMax 200, approval above 50, USD, openai-api allowed).
+ * policy (demo-agent: perTxMax 100, dailyMax 200, approval above 50, USD, openai-api allowed on mock).
+ * On paypal/near rails the agent scales amounts and maps logical payees via GET /rail (e.g. NEAR amountScale 0.01).
  */
 export const SCENARIOS = {
   /** 1M tokens x 10 USD = 10 USD → auto-approved and paid. */

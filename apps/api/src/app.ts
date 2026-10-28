@@ -28,12 +28,20 @@ export const DEFAULT_POLICY: Policy = {
 /** Max request body size in bytes. */
 export const MAX_BODY_BYTES = 64 * 1024;
 
+export interface DemoRailInfo {
+  currency: string;
+  amountScale: number;
+  payees: Record<string, string>;
+}
+
 export interface AppOptions {
   /** Ledger instance, or a path to build one. One writer process per file. */
   ledger: Ledger | string;
   adapter: PaymentAdapter;
   /** Initial policy (kept in memory). Defaults to DEFAULT_POLICY. */
   policy?: Policy;
+  /** Per-rail demo mapping for GET /rail (currency, scale, logical payee → rail address). */
+  demo?: DemoRailInfo;
   /** Clock for generated createdAt and "today" in GET /ledger. */
   now?: () => Date;
   /** Generator for intent ids when the client omits one. */
@@ -79,11 +87,30 @@ export function createApp(options: AppOptions) {
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? (() => `pi_${randomUUID()}`);
   let policy: Policy = structuredClone(options.policy ?? DEFAULT_POLICY);
+  const demo: DemoRailInfo = options.demo ?? {
+    currency: policy.currency ?? 'USD',
+    amountScale: 1,
+    payees: {},
+  };
 
   const routes: Route[] = [
     {
       pattern: /^\/health$/,
       methods: { GET: async () => ({ status: 200, body: { ok: true, rail: adapter.rail } }) },
+    },
+    {
+      pattern: /^\/rail$/,
+      methods: {
+        GET: async () => ({
+          status: 200,
+          body: {
+            rail: adapter.rail,
+            currency: demo.currency,
+            amountScale: demo.amountScale,
+            payees: demo.payees,
+          },
+        }),
+      },
     },
     {
       pattern: /^\/intents$/,

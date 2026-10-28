@@ -2,8 +2,11 @@
 
 Demo task-agent CLI. It takes a task ("buy 1M tokens of GPT inference") or a built-in scenario, asks a
 **Planner** for a quote, submits it with `POST /intents`, and when the policy says `needs_approval` it waits
-for a human by polling `GET /ledger`. Every run starts with `GET /health`: it prints the server's rail and exits 1
-at once if the API is unreachable (connection refused, 5 s timeout) or `/health` is not 2xx. No runtime deps beyond `@agent-pay/core` types and Node built-ins
+for a human by polling `GET /ledger`. Every run starts with `GET /health`: it exits 1
+at once if the API is unreachable (connection refused, 5 s timeout) or `/health` is not 2xx. It then reads
+`GET /rail` once; that answer is the single source for the printed rail, the `--rail` check and the payee/amount
+mapping. A server without `/rail` falls back to the rail in `/health`; if both report different rails the run
+stops with `rail_inconsistent` (exit 1). The planner itself stays rail-agnostic. No runtime deps beyond `@agent-pay/core` types and Node built-ins
 (global `fetch`, `node:util` `parseArgs`). No API keys, no LLM calls.
 
 ## Run
@@ -11,23 +14,23 @@ at once if the API is unreachable (connection refused, 5 s timeout) or `/health`
 ```sh
 npm start -w @agent-pay/api                                   # terminal 1: API on :8787, RAIL=mock
 
-npm run agent -w @agent-pay/agent -- --scenario small          # terminal 2
-npm run agent -w @agent-pay/agent -- --scenario over-limit
-npm run agent -w @agent-pay/agent -- --scenario needs-approval --auto-approve-as alice
-npm run agent -w @agent-pay/agent -- --scenario needs-approval   # then approve it yourself:
+npm run agent -- --scenario small          # terminal 2
+npm run agent -- --scenario over-limit
+npm run agent -- --scenario needs-approval --auto-approve-as alice
+npm run agent -- --scenario needs-approval   # then approve it yourself:
 #   curl -X POST localhost:8787/intents/<id>/approve -H 'content-type: application/json' -d '{"approver":"alice"}'
-npm run agent -w @agent-pay/agent -- "rent a GPU on NEAR for 3 hours"
-npm run agent -w @agent-pay/agent -- --scenario small --json
+npm run agent -- "rent a GPU on NEAR for 3 hours"
+npm run agent -- --scenario small --json
 ```
 
-Use `npm run -s ...` to hide npm's own banner and its error footer on non-zero exits.
+Run these from the repo root. Use `npm run -s agent -- ...` (e.g. when piping `--json` output) to hide npm's own `> agent` banner and its error footer on non-zero exits.
 
 | Option | Default | |
 |---|---|---|
 | `<task...>` / `--task <text>` | | Free-text task for the planner |
 | `--scenario <name>` | | `small`, `over-limit`, or `needs-approval` (mutually exclusive with a task) |
 | `--api <url>` | `http://127.0.0.1:8787` | API base URL |
-| `--rail <name>` | | Expected server rail (`mock`, `paypal`, `near`, …). If `GET /health` reports another rail, exit 1 (`rail_mismatch`) before any intent is sent |
+| `--rail <name>` | | Expected server rail (`mock`, `paypal`, `near`, …). If the server rail (`GET /rail`, else `GET /health`) differs, exit 1 (`rail_mismatch`) before any intent is sent |
 | `--agent-id <id>` | `demo-agent` | `agentId` on the intent |
 | `--timeout-ms <n>` | `120000` | How long to wait for a human decision, and (separately) for a pending receipt to settle |
 | `--poll-ms <n>` | `1000` | `GET /ledger` poll interval while waiting for approval; `POST /intents/:id/refresh` interval while a receipt is pending |
@@ -68,11 +71,11 @@ day is rejected with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
 | 0 | `paid` | Payment went through |
 | 2 | `rejected` | Rejected by policy or by a human |
 | 3 | `approval_timeout` / `receipt_pending` | Still `needs_approval` after `--timeout-ms`, or receipt still `pending` after the receipt wait |
-| 1 | `failed` / `error` | Payment failed on the rail, or the agent could not finish: bad arguments, planner error, API down (`api_unreachable`, `health_check_failed`), `--rail` mismatch (`rail_mismatch`), HTTP error |
+| 1 | `failed` / `error` | Payment failed on the rail, or the agent could not finish: bad arguments, planner error, API down (`api_unreachable`, `health_check_failed`), `--rail` mismatch (`rail_mismatch`), `/health` and `/rail` disagree (`rail_inconsistent`), HTTP error |
 
 ## Human output
 
-First a `server: <api url> rail=<rail>` line from `GET /health`, then one `[step] message` line per step, then
+First a `server: <api url> rail=<rail>` line (rail from `GET /rail`, else `GET /health`), then one `[step] message` line per step, then
 `Done: <status> (exit N)` plus `Reason:`, `Receipt:` or `Error:` lines.
 
 ```
@@ -106,9 +109,10 @@ step; if the API is down the output is just an `error` step and an `error` summa
 
 | `step` | Extra fields |
 |---|---|
-| `health` | `apiUrl`, `rail` (`unknown` if `/health` has none), `expectedRail` (with `--rail`); always the first line when the API is up |
+| `health` | `apiUrl`, `rail` (from `GET /rail`, else `/health`; `unknown` if neither has one), `expectedRail` (with `--rail`); always the first line when the API is up |
 | `task` | `task`, `scenario` |
 | `quote` | `planner`, `quote` |
+| `rail` | `logicalPayee`, `payee`, `quoteAmount`, `quoteCurrency`, `amount`, `currency`, `amountScale`; only when `GET /rail` changes the payee, currency or amount (e.g. `paypal`, `near`; never on `mock`) |
 | `submit_intent` | `agentId` |
 | `intent_result` | `apiStatus` (`paid`/`rejected`/`needs_approval`/`failed`), `reason` |
 | `await_approval` | `timeoutMs`, `pollMs`, `autoApproveAs` |

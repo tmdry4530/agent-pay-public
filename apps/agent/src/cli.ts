@@ -6,12 +6,13 @@ const HELP = `agent-pay task agent (demo CLI)
 
 Usage:
   node src/cli.ts [--task <text> | <task...>] [--scenario small|over-limit|needs-approval]
-  npm run agent -w @agent-pay/agent -- --scenario small
+  npm run agent -- --scenario small
 
 Options:
   --api <url>              API base URL (default: http://127.0.0.1:8787)
-  --rail <name>            Expected server rail (mock | paypal | near ...). The CLI always calls GET /health
-                           first and prints "server: <url> rail=<rail>"; with --rail it exits 1 if they differ
+  --rail <name>            Expected server rail (mock | paypal | near ...). The CLI always calls GET /health,
+                           then GET /rail, and prints "server: <url> rail=<rail>"; with --rail it exits 1 if
+                           they differ
   --agent-id <id>          Agent id (default: demo-agent)
   --task <text>            Task description for the planner
   --scenario <name>        Built-in demo task: small | over-limit | needs-approval

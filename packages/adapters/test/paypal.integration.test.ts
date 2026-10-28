@@ -1,37 +1,41 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createPayPalAdapter, payPalConfigFromEnv } from '../src/paypal.ts';
+import { createPayPalAdapter, payPalConfigFromEnv } from '../src/index.ts';
 import type { PaymentIntent } from '../src/index.ts';
 
-// In sandbox, server-side capture without buyer approval typically fails with
-// 422 ORDER_NOT_APPROVED. The adapter resolves that as a failed receipt.
+const skipReason =
+  !process.env.PAYPAL_CLIENT_ID ||
+  !process.env.PAYPAL_CLIENT_SECRET ||
+  !process.env.PAYPAL_PAYOUT_RECEIVER
+    ? 'PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET / PAYPAL_PAYOUT_RECEIVER not set'
+    : false;
 
 test(
-  'paypal sandbox: create+capture+refund',
-  { skip: !process.env.PAYPAL_CLIENT_ID && 'PAYPAL_CLIENT_ID not set' },
+  'paypal sandbox payouts: pay and status',
+  { skip: skipReason },
   async () => {
     const config = payPalConfigFromEnv();
     const adapter = createPayPalAdapter(config);
     const intent: PaymentIntent = {
-      id: `sandbox-${Date.now()}`,
+      id: `payout-${Date.now()}`,
       agentId: 'integration-agent',
-      payee: 'sandbox-payee@example.com',
-      amount: 1.0,
+      payee: process.env.PAYPAL_PAYOUT_RECEIVER ?? '',
+      amount: 0.01,
       currency: 'USD',
-      purpose: 'adapters integration test',
+      purpose: 'adapters payout integration test',
       createdAt: new Date().toISOString(),
     };
 
     const receipt = await adapter.pay(intent);
     assert.equal(receipt.intentId, intent.id);
     assert.equal(receipt.rail, 'paypal');
-    assert.ok(receipt.status === 'failed' || receipt.status === 'succeeded');
+    assert.ok(['succeeded', 'pending', 'failed'].includes(receipt.status));
 
-    if (receipt.status === 'succeeded') {
-      const refund = await adapter.refund!(receipt);
-      assert.equal(refund.intentId, intent.id);
-      assert.equal(refund.rail, 'paypal');
-      assert.ok(refund.status === 'refunded' || refund.status === 'pending' || refund.status === 'failed');
+    if (receipt.externalId !== '') {
+      const updated = await adapter.status(receipt);
+      assert.equal(updated.intentId, intent.id);
+      assert.equal(updated.rail, 'paypal');
+      assert.equal(updated.externalId, receipt.externalId);
     }
   },
 );
