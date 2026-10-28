@@ -55,9 +55,9 @@ If no item status, batch `batch_status` is used:
 |-----------|---------|
 | Token endpoint failure (any) | `failed`, `externalId: ''` |
 | `POST /payouts` **4xx** (except handled duplicate — see idempotency) | `failed`, `externalId: ''` |
-| `POST /payouts` **5xx**, any thrown error on POST (network, timeout, abort, other), or **2xx** with unparseable body / missing `payout_batch_id` | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'` |
-| Duplicate `sender_batch_id` with HATEOAS link to existing batch | `GET` batch; on success return that receipt; on GET error/non-2xx → `pending`, `externalId: batch id`, `meta.unknownOutcome: 'true'` |
-| Duplicate error **without** batch link | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.duplicateSenderBatchId: 'true'` |
+| `POST /payouts` **5xx**, any thrown error on POST (network, timeout, abort, other), or **2xx** with unparseable body / missing `payout_batch_id` | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.needsManualResolve: 'true'`, optional `meta.errorName` from PayPal error name when known |
+| Duplicate `sender_batch_id` with HATEOAS link to existing batch | `GET` batch; on success return that receipt (with `meta.duplicateSenderBatchId` / `meta.errorName` from duplicate error); on GET error/non-2xx → `pending`, `externalId: batch id`, `meta.unknownOutcome: 'true'` (no `needsManualResolve`) |
+| Duplicate error **without** batch link | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.duplicateSenderBatchId: 'true'`, `meta.needsManualResolve: 'true'`, `meta.errorName` when PayPal names the error |
 
 Every converted failure or unknown outcome invokes `onError(error, { intentId, op })` with `op` in `token` | `payout` | `status`. Never log secrets.
 
@@ -76,8 +76,10 @@ String keys only (never secrets):
 | `batchStatus` | Batch status from PayPal |
 | `payoutItemId` | First item `payout_item_id` when present |
 | `transactionStatus` | First item `transaction_status` when present |
-| `unknownOutcome` | `'true'` when pay ended pending due to uncertain outcome (5xx, POST fetch throw, bad 2xx body, duplicate without resolvable batch) |
-| `duplicateSenderBatchId` | `'true'` when duplicate id error had no batch link (manual verification) |
+| `unknownOutcome` | `'true'` when pay ended pending due to uncertain outcome (5xx, POST fetch throw, bad 2xx body, duplicate without resolvable batch, or duplicate GET failure with batch id) |
+| `needsManualResolve` | `'true'` when `externalId` is empty and outcome is uncertain — `status()` cannot refresh the receipt; operator must settle (planned `POST /intents/:id/resolve`) |
+| `errorName` | PayPal error `name` when known (`PayPalApiError` with a specific name, or duplicate-guess from parsed 4xx body); omitted for non-PayPal errors (e.g. network `TypeError`) |
+| `duplicateSenderBatchId` | `'true'` on duplicate `sender_batch_id` errors (with or without batch link); signals idempotency collision |
 
 ## Idempotency
 

@@ -5,6 +5,7 @@ import {
   createPayPalHttp,
   formatAmount,
   parsePayPalError,
+  PayPalApiError,
   type PayPalConfig,
 } from './paypal-client.ts';
 
@@ -151,6 +152,32 @@ function isDuplicateSenderBatchError(
   return false;
 }
 
+function paypalErrorNameForMeta(error: unknown): string | undefined {
+  if (error instanceof PayPalApiError) {
+    const n = error.name;
+    if (n !== '' && n !== 'PayPalApiError') {
+      return n;
+    }
+  }
+  return undefined;
+}
+
+function buildPendingUnknownMeta(
+  error: unknown,
+  extraMeta?: Record<string, string>,
+): Record<string, string> {
+  const meta: Record<string, string> = {
+    unknownOutcome: 'true',
+    needsManualResolve: 'true',
+    ...extraMeta,
+  };
+  const fromError = paypalErrorNameForMeta(error);
+  if (fromError !== undefined && meta.errorName === undefined) {
+    meta.errorName = fromError;
+  }
+  return meta;
+}
+
 function extractBatchIdFromDuplicateError(
   parsed: PayPalNamedErrorBody | null,
   bodyText: string,
@@ -171,8 +198,17 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
   const http = createPayPalHttp(config);
   const { nowMs, onError, apiCall } = http;
 
-  async function getPayoutBatch(batchId: string, intentId: string): Promise<AdapterReceipt> {
+  async function getPayoutBatch(
+    batchId: string,
+    intentId: string,
+    extraMeta?: Record<string, string>,
+  ): Promise<AdapterReceipt> {
     const at = new Date(nowMs()).toISOString();
+    const unknownMeta = (more?: Record<string, string>): Record<string, string> => ({
+      unknownOutcome: 'true',
+      ...extraMeta,
+      ...more,
+    });
     let response: Response;
     try {
       response = await apiCall(`/v1/payments/payouts/${batchId}`, { method: 'GET' });
@@ -184,7 +220,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
         externalId: batchId,
         status: 'pending',
         at,
-        meta: { unknownOutcome: 'true' },
+        meta: unknownMeta(),
       };
     }
     if (!response.ok) {
@@ -195,11 +231,11 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
         externalId: batchId,
         status: 'pending',
         at,
-        meta: { unknownOutcome: 'true' },
+        meta: unknownMeta(),
       };
     }
     const body = (await response.json()) as PayoutBatchResponse;
-    return receiptFromBatchBody(intentId, body, at);
+    return receiptFromBatchBody(intentId, body, at, extraMeta);
   }
 
   return {
@@ -224,6 +260,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
         };
       };
 
+      // Never record a duplicate-guess as failed: if it was a real duplicate the first payout may have gone out, and failing it frees the daily limit, so the agent could pay twice. An operator settles these via POST /intents/:id/resolve (planned).
       const pendingUnknown = (
         error: unknown,
         extraMeta?: Record<string, string>,
@@ -235,7 +272,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
           externalId: '',
           status: 'pending',
           at,
-          meta: { unknownOutcome: 'true', ...extraMeta },
+          meta: buildPendingUnknownMeta(error, extraMeta),
         };
       };
 
@@ -291,12 +328,17 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
 
         if (isDuplicateSenderBatchError(payoutResponse.status, bodyText, parsed)) {
           const batchId = extractBatchIdFromDuplicateError(parsed, bodyText);
+          const duplicateMeta: Record<string, string> = { duplicateSenderBatchId: 'true' };
+          const parsedName = parsed?.name;
+          if (parsedName !== undefined && parsedName !== '') {
+            duplicateMeta.errorName = parsedName;
+          }
           if (batchId) {
-            return getPayoutBatch(batchId, intent.id);
+            return getPayoutBatch(batchId, intent.id, duplicateMeta);
           }
           return pendingUnknown(
             parsed ?? new Error('Duplicate sender_batch_id without batch link'),
-            { duplicateSenderBatchId: 'true' },
+            duplicateMeta,
           );
         }
 

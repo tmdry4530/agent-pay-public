@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PaymentIntent, Receipt, ReceiptStatus } from '../src/index.ts';
+import type { AdapterReceipt } from '../src/adapter-types.ts';
 import { createPayPalAdapter, mapPayoutStatus, PayPalApiError } from '../src/paypal.ts';
 import { receiptMeta } from '../src/adapter-types.ts';
 import {
@@ -236,6 +237,10 @@ describe('pay() — payout error fixtures', () => {
       assert.equal(receipt.status, 'pending');
       assert.equal(receipt.externalId, '');
       assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+      assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+      const expectedErrorName =
+        name === 'INTERNAL_SERVER_ERROR_500' ? 'INTERNAL_SERVER_ERROR' : 'SERVICE_UNAVAILABLE';
+      assert.equal(receiptMeta(receipt)?.errorName, expectedErrorName);
       assert.ok(errors.length > 0);
     });
   }
@@ -278,6 +283,8 @@ describe('pay() — payout error fixtures', () => {
         assert.equal(receipt.externalId, '');
         assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
         assert.equal(receiptMeta(receipt)?.duplicateSenderBatchId, 'true');
+        assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+        assert.equal(receiptMeta(receipt)?.errorName, entry.name);
         assert.ok(errors.length > 0);
       });
     } else {
@@ -300,7 +307,59 @@ describe('pay() — payout error fixtures', () => {
     }
   }
 
-  it.todo('DUPLICATE_ITEM / USER_BUSINESS_ERROR duplicate-guess pending; needs decision');
+  it('POST payouts fetch throws -> pending, needsManualResolve, no errorName', async () => {
+    const errors: unknown[] = [];
+    const { fetchMock } = createFetchMock([
+      tokenRoute(),
+      {
+        method: 'POST',
+        path: '/v1/payments/payouts',
+        handler: () => {
+          throw new TypeError('network down');
+        },
+      },
+    ]);
+    const adapter = createPayPalAdapter(adapterConfig(fetchMock, (e) => errors.push(e)));
+    const receipt = await adapter.pay(baseIntent({ id: 'post-throw' }));
+    assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.externalId, '');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+    assert.equal(receiptMeta(receipt)?.errorName, undefined);
+    assert.ok(errors.length > 0);
+  });
+
+  it('duplicate error with batch link -> receipt from GET, duplicateSenderBatchId, no needsManualResolve', async () => {
+    const { fetchMock, calls } = createFetchMock([
+      tokenRoute(),
+      {
+        method: 'POST',
+        path: '/v1/payments/payouts',
+        handler: () =>
+          jsonResponse(
+            {
+              name: 'USER_BUSINESS_ERROR',
+              message: 'sender_batch_id already used',
+              links: [{ href: `${BASE}/v1/payments/payouts/LINKED-BATCH`, rel: 'self' }],
+            },
+            400,
+          ),
+      },
+      {
+        method: 'GET',
+        path: '/v1/payments/payouts/LINKED-BATCH',
+        handler: () => jsonResponse(SHOW_PAYOUT_BATCH_200),
+      },
+    ]);
+    const adapter = createPayPalAdapter(adapterConfig(fetchMock));
+    const receipt = await adapter.pay(baseIntent({ id: 'dup-link' }));
+    assert.equal(receipt.externalId, 'MJ77GF8MQ2TF6');
+    assert.equal(receiptMeta(receipt)?.duplicateSenderBatchId, 'true');
+    assert.equal(receiptMeta(receipt)?.errorName, 'USER_BUSINESS_ERROR');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, undefined);
+    const getCalls = calls.filter((c) => c.method === 'GET' && c.url.includes('LINKED-BATCH'));
+    assert.equal(getCalls.length, 1);
+  });
 });
 
 describe('status() — payout batch fixtures', () => {
@@ -370,6 +429,27 @@ describe('status() — payout batch fixtures', () => {
       assert.equal(out.status, mapPayoutStatus(batchStatus));
     });
   }
+
+  it('empty externalId with needsManualResolve -> unchanged, no GET', async () => {
+    const manualReceipt: AdapterReceipt = {
+      intentId: 'intent-manual',
+      rail: 'paypal',
+      externalId: '',
+      status: 'pending',
+      at: '2026-01-01T00:00:00.000Z',
+      meta: {
+        unknownOutcome: 'true',
+        needsManualResolve: 'true',
+        duplicateSenderBatchId: 'true',
+        errorName: 'USER_BUSINESS_ERROR',
+      },
+    };
+    const { fetchMock, calls } = createFetchMock([tokenRoute()]);
+    const adapter = createPayPalAdapter(adapterConfig(fetchMock));
+    const out = await adapter.status(manualReceipt);
+    assert.deepEqual(out, manualReceipt);
+    assert.equal(calls.filter((c) => c.method === 'GET').length, 0);
+  });
 
   for (const { name, body, status } of [
     { name: 'INTERNAL_SERVER_ERROR_500', body: INTERNAL_SERVER_ERROR_500, status: 500 },
