@@ -63,11 +63,50 @@ test('main RAIL=paypal with only the client id set lists PAYPAL_CLIENT_SECRET an
   assertNoSecretsOrStack(all);
 });
 
-test('main RAIL=near: adapter_not_wired with a clear hint, exit 1', async (t) => {
-  const { stderr, all } = await startExpectingFailure(t, { RAIL: 'near', NEAR_PRIVATE_KEY: FAKE.near, PAYPAL_CLIENT_SECRET: FAKE.secret });
-  assert.match(stderr, /^agent-pay api failed to start: adapter_not_wired: near adapter not wired yet \(RAIL=near\)$/m);
-  assert.match(stderr, /^RAIL=near is not available in this build yet; use RAIL=mock or RAIL=paypal$/m);
+test('main RAIL=near with no NEAR credentials lists both missing names from AdapterConfigError, no values', async (t) => {
+  const { stderr, all } = await startExpectingFailure(t, {
+    RAIL: 'near',
+    NEAR_NETWORK: 'testnet',
+    PAYPAL_CLIENT_ID: FAKE.id,
+    PAYPAL_CLIENT_SECRET: FAKE.secret,
+    SOME_API_TOKEN: FAKE.token,
+  });
+  assert.match(stderr, /^agent-pay api failed to start: adapter_config: NEAR_ACCOUNT_ID environment variable is required \(RAIL=near\)$/m);
+  assert.match(stderr, /^missing required env vars for RAIL=near: NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY$/m);
+  assert.match(stderr, /\.env\.example/);
+  assert.doesNotMatch(stderr, /adapter_not_wired|not available in this build/);
   assertNoSecretsOrStack(all);
+});
+
+test('main RAIL=near with only the private key set lists NEAR_ACCOUNT_ID and never prints the key', async (t) => {
+  const { stderr, all } = await startExpectingFailure(t, { RAIL: 'near', NEAR_PRIVATE_KEY: FAKE.near, PAYPAL_CLIENT_SECRET: FAKE.secret });
+  assert.match(stderr, /^missing required env vars for RAIL=near: NEAR_ACCOUNT_ID$/m);
+  assertNoSecretsOrStack(all);
+});
+
+test('main RAIL=paypal-orders is not a server rail (Orders v2 is adapter-side only): unknown_rail, no env needed', async (t) => {
+  const { stderr, all } = await startExpectingFailure(t, { RAIL: 'paypal-orders', PAYPAL_CLIENT_ID: FAKE.id, PAYPAL_CLIENT_SECRET: FAKE.secret });
+  assert.match(stderr, /^agent-pay api failed to start: unknown_rail: RAIL must be one of mock\|paypal\|near, got "paypal-orders"$/m);
+  assert.doesNotMatch(stderr, /missing required env vars/);
+  assertNoSecretsOrStack(all);
+});
+
+test('nearFactory / paypalFactory: AdapterConfigError.missing carries names only', async () => {
+  const { nearFactory, paypalFactory } = await import('../src/adapters.ts');
+  const now = () => new Date();
+  assert.throws(
+    () => nearFactory({ env: { NEAR_PRIVATE_KEY: FAKE.near }, now }),
+    (err: unknown) => err instanceof AdapterConfigError && JSON.stringify(err.missing) === '["NEAR_ACCOUNT_ID"]' && !err.message.includes(FAKE.near),
+  );
+  assert.throws(
+    () => paypalFactory({ env: {}, now }),
+    (err: unknown) => err instanceof AdapterConfigError && JSON.stringify(err.missing) === '["PAYPAL_CLIENT_ID","PAYPAL_CLIENT_SECRET"]',
+  );
+  // Invalid (not missing) config: no names listed.
+  assert.throws(
+    () => nearFactory({ env: { NEAR_ACCOUNT_ID: 'alice.testnet', NEAR_PRIVATE_KEY: FAKE.near, NEAR_NETWORK: 'devnet' }, now }),
+    (err: unknown) => err instanceof AdapterConfigError && err.missing === undefined && /NEAR_NETWORK must be testnet or mainnet/.test(err.message),
+  );
 });
 
 test('main with a bad PORT fails cleanly', async (t) => {
@@ -76,8 +115,8 @@ test('main with a bad PORT fails cleanly', async (t) => {
   assertNoSecretsOrStack(all);
 });
 
-test('missingEnvNames: a `missing` field on the error (future AdapterConfigError) wins', () => {
-  const err = Object.assign(new AdapterConfigError('adapter_config: near credentials missing (RAIL=near)'), {
+test('missingEnvNames: AdapterConfigError.missing wins', () => {
+  const err = new AdapterConfigError('adapter_config: near credentials missing (RAIL=near)', {
     missing: ['NEAR_ACCOUNT_ID', 'NEAR_PRIVATE_KEY', 'not an env name'],
   });
   assert.deepEqual(missingEnvNames(err, {}, 'near'), ['NEAR_ACCOUNT_ID', 'NEAR_PRIVATE_KEY']);
@@ -91,9 +130,15 @@ test('missingEnvNames: a `missing` field on the error (future AdapterConfigError
 
 test('missingEnvNames: falls back to blank env names mentioned in a "required" message', () => {
   const err = new AdapterConfigError('adapter_config: NEAR_ACCOUNT_ID environment variable is required (RAIL=near)');
-  assert.deepEqual(missingEnvNames(err, {}, 'near'), ['NEAR_ACCOUNT_ID']);
-  assert.deepEqual(missingEnvNames(err, { NEAR_ACCOUNT_ID: 'alice.testnet' }, 'near'), []);
-  assert.deepEqual(missingEnvNames(new Error('NEAR_NETWORK must be testnet or mainnet'), {}, 'near'), []);
+  // Without a `missing` list: the rail's REQUIRED_ENV that are blank, else env names quoted in the message.
+  assert.deepEqual(missingEnvNames(err, {}, 'near'), ['NEAR_ACCOUNT_ID', 'NEAR_PRIVATE_KEY']);
+  assert.deepEqual(missingEnvNames(err, { NEAR_ACCOUNT_ID: 'alice.testnet' }, 'near'), ['NEAR_PRIVATE_KEY']);
+  assert.deepEqual(missingEnvNames(err, {}), ['NEAR_ACCOUNT_ID']);
+  assert.deepEqual(missingEnvNames(err, { NEAR_ACCOUNT_ID: 'alice.testnet' }), []);
+  // Invalid (not missing) value with the required names set: nothing to list.
+  const nearSet = { NEAR_ACCOUNT_ID: 'alice.testnet', NEAR_PRIVATE_KEY: FAKE.near };
+  assert.deepEqual(missingEnvNames(new Error('NEAR_NETWORK must be testnet or mainnet'), nearSet, 'near'), []);
+  assert.deepEqual(missingEnvNames(new Error('NEAR_NETWORK must be testnet or mainnet'), {}), []);
 });
 
 test('redactEnvValues scrubs credential-like env values from messages', () => {

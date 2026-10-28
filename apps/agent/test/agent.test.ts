@@ -230,6 +230,55 @@ test('health: non-2xx GET /health → health_check_failed (exit 1)', async (t) =
   assert.deepEqual(steps, ['error']);
 });
 
+/** Fake API answering GET /health and GET /rail with fixed bodies (null → 404); counts hits per path. */
+async function startFakeRailApi(t: { after: (fn: () => Promise<void>) => void }, health: unknown, rail: unknown) {
+  const hits: Record<string, number> = {};
+  const server = createHttpServer((req, res) => {
+    const path = req.url ?? '';
+    hits[path] = (hits[path] ?? 0) + 1;
+    const body = path === '/health' ? health : path === '/rail' ? rail : null;
+    res.writeHead(body === null ? 404 : 200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body ?? { error: 'not_found' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const addr = server.address();
+  return { base: `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`, hits };
+}
+
+test('health + /rail: displayed rail and --rail check come from one GET /rail, fetched once', async (t) => {
+  const railBody = { rail: 'near', currency: 'NEAR', amountScale: 0.01, payees: { 'openai-api': 'demo-merchant.testnet' } };
+  const { base, hits } = await startFakeRailApi(t, { ok: true, rail: 'near' }, railBody);
+  const mismatch = await run({ apiUrl: base, scenario: 'small', expectedRail: 'paypal' });
+  assert.equal(mismatch.result.exitCode, 1);
+  assert.equal(mismatch.lines[0], `server: ${base} rail=near`);
+  assert.match(mismatch.result.error ?? '', /^rail_mismatch: .* runs rail=near but --rail paypal was expected/);
+  assert.deepEqual(mismatch.steps, ['health', 'error']);
+  assert.deepEqual(hits, { '/health': 1, '/rail': 1 });
+
+  // /health without a rail (older server) but /rail present: /rail is the source of truth.
+  const noHealthRail = await startFakeRailApi(t, { ok: true }, railBody);
+  const ok = await run({ apiUrl: noHealthRail.base, task: 'buy 1M tokens from openai-api', expectedRail: 'near' });
+  assert.equal(ok.lines[0], `server: ${noHealthRail.base} rail=near`);
+  const rail = ok.events.find((e) => e.type === 'step' && e.step === 'rail');
+  assert.equal(rail?.type === 'step' && rail.payee, 'demo-merchant.testnet', 'mapping reuses the preflight /rail answer');
+  assert.equal(noHealthRail.hits['/rail'], 1, 'GET /rail is not fetched a second time for the mapping');
+});
+
+test('health + /rail: server without /rail falls back to /health.rail; disagreement is rail_inconsistent (exit 1)', async (t) => {
+  const legacy = await startFakeRailApi(t, { ok: true, rail: 'mock' }, null);
+  const r = await run({ apiUrl: legacy.base, scenario: 'small', expectedRail: 'paypal' });
+  assert.equal(r.lines[0], `server: ${legacy.base} rail=mock`);
+  assert.match(r.result.error ?? '', /^rail_mismatch: .* runs rail=mock but --rail paypal was expected/);
+
+  const split = await startFakeRailApi(t, { ok: true, rail: 'mock' }, { rail: 'near', currency: 'NEAR', amountScale: 0.01, payees: {} });
+  const bad = await run({ apiUrl: split.base, scenario: 'small' });
+  assert.equal(bad.result.status, 'error');
+  assert.equal(bad.result.exitCode, 1);
+  assert.match(bad.result.error ?? '', /^rail_inconsistent: GET \/health reports rail=mock but GET \/rail reports rail=near/);
+  assert.deepEqual(bad.steps, ['error']);
+});
+
 test('planner error: unknown task → error (exit 1) before any API call', async () => {
   const { result, steps } = await run({ apiUrl: 'http://127.0.0.1:1', task: 'send flowers to mom', healthCheck: false });
   assert.equal(result.status, 'error');
