@@ -6,6 +6,8 @@ import type {
   Rail,
 } from '@agent-pay/core';
 
+export type { Rail };
+
 /** Intent fields sent to POST /intents (id and createdAt optional). */
 export type IntentDraft = Omit<PaymentIntent, 'id' | 'createdAt'> &
   Partial<Pick<PaymentIntent, 'id' | 'createdAt'>>;

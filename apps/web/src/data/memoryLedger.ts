@@ -1,5 +1,12 @@
-import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Receipt } from '@agent-pay/core';
-import type { LedgerEntry, PaymentStatus } from '@agent-pay/core';
+import type {
+  Decision,
+  DecisionRecord,
+  DecisionStatus,
+  LedgerState,
+  PaymentIntent,
+  Receipt,
+} from '@agent-pay/core';
+import type { LedgerEntry, PaymentStatus, ReceiptResolution } from '@agent-pay/core';
 
 /** UTC calendar day "YYYY-MM-DD" of a Date or ISO string. */
 export function utcDay(date: Date | string): string {
@@ -54,7 +61,12 @@ export class MemoryLedger {
       }
       utcDay(intent.createdAt);
       const at = this.#now().toISOString();
-      const entry: LedgerEntry = { intent: structuredClone(intent), recordedAt: at, updatedAt: at };
+      const entry: LedgerEntry = {
+        intent: structuredClone(intent),
+        decisions: [],
+        recordedAt: at,
+        updatedAt: at,
+      };
       entries.push(entry);
       return entry;
     });
@@ -63,7 +75,7 @@ export class MemoryLedger {
   recordDecision(
     intentId: string,
     decision: Decision,
-    options: { ifStatus?: DecisionStatus } = {},
+    options: { ifStatus?: DecisionStatus; actor?: string } = {},
   ): Promise<LedgerEntry> {
     return this.#mutate((entries) => {
       const entry = find(entries, intentId);
@@ -75,8 +87,12 @@ export class MemoryLedger {
           `intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${options.ifStatus}`,
         );
       }
-      entry.decision = { ...decision };
-      entry.updatedAt = this.#now().toISOString();
+      const at = this.#now().toISOString();
+      entry.decision = { status: decision.status, reason: decision.reason };
+      const record: DecisionRecord = { ...entry.decision, at };
+      if (options.actor !== undefined) record.actor = options.actor;
+      entry.decisions.push(record);
+      entry.updatedAt = at;
       return entry;
     });
   }
@@ -113,7 +129,11 @@ export class MemoryLedger {
     });
   }
 
-  settleReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry> {
+  settleReceipt(
+    intentId: string,
+    receipt: Receipt,
+    resolution?: ReceiptResolution,
+  ): Promise<LedgerEntry> {
     return this.#mutate((entries) => {
       const entry = find(entries, intentId);
       if (receipt.intentId !== intentId) {
@@ -131,6 +151,7 @@ export class MemoryLedger {
       }
       entry.receipt = { ...receipt };
       if (receipt.status === 'failed') entry.paymentStatus = 'failed';
+      if (resolution !== undefined) entry.resolution = { ...resolution };
       entry.updatedAt = this.#now().toISOString();
       return entry;
     });

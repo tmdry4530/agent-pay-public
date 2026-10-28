@@ -1,4 +1,4 @@
-import type { LedgerEntry, Rail, Receipt } from '@agent-pay/core';
+import type { LedgerEntry, Rail, Receipt, ReceiptResolution } from '@agent-pay/core';
 import type { PaymentAdapter } from '@agent-pay/core';
 import { FailureCode, PaymentError, type PaymentResult } from '@agent-pay/core/orchestrator.ts';
 import { MemoryLedgerError } from './memoryLedger';
@@ -9,7 +9,11 @@ const STATUS_VALUES: ReadonlySet<string> = new Set(['succeeded', 'pending', 'fai
 
 export type RefreshLedger = {
   get(intentId: string): Promise<LedgerEntry | undefined>;
-  settleReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry>;
+  settleReceipt(
+    intentId: string,
+    receipt: Receipt,
+    resolution?: ReceiptResolution,
+  ): Promise<LedgerEntry>;
 };
 
 function validateStatusReceipt(

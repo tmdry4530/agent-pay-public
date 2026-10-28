@@ -79,6 +79,16 @@ describe('AgentPay in-memory client', () => {
     expect(approved.decision.reason).toMatch(new RegExp(ReasonCode.ApprovedByHuman));
     const snap = await client.getLedger();
     expect(snap.today.totals[DEMO_POLICY.agentId]).toBe(75);
+    const entry = snap.entries.find((e) => e.intent.id === submitted.intentId);
+    expect(entry?.decisions).toHaveLength(2);
+    expect(entry?.decisions[0]).toMatchObject({
+      status: 'needs_approval',
+      actor: 'policy',
+    });
+    expect(entry?.decisions[1]).toMatchObject({
+      status: 'approved',
+      actor: 'demo-operator',
+    });
   });
 
   it('needs_approval then reject yields rejected_by_human; approve after reject throws', async () => {
