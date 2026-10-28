@@ -47,6 +47,7 @@ All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
 | `POST /intents/:id/approve` | optional `{approver?}` | `200 PaymentResult` (`paid`, or `rejected` if the re-check fails) |
 | `POST /intents/:id/reject` | optional `{approver?, note?}` | `200 PaymentResult` (`rejected`, reason `rejected_by_human: …`) |
 | `POST /intents/:id/refresh` | optional empty body | `200 PaymentResult & {changed: boolean}` — polls the adapter's `status()` for a **pending** receipt on this rail; settles the ledger when the rail reports `succeeded` or `failed`. Still `pending` → `changed: false`, no ledger write. |
+| `POST /intents/:id/resolve` | `{status: succeeded\|failed\|refunded, note, externalId?, resolvedBy?}` | `200 PaymentResult & {changed: true, resolution}` — operator settles a **pending** receipt by hand; never calls the adapter (see below) |
 | `GET /ledger` | | `200 {entries: LedgerEntry[], today: {day: "YYYY-MM-DD" (UTC), totals: {[agentId]: number}}}` |
 | `GET /policy` | | `200 Policy` |
 | `PUT /policy` | full `Policy` | `200 Policy` |
@@ -60,6 +61,22 @@ fills in `pi_<uuid>` and the current time. Unknown fields are rejected. For an i
 total (approved and not failed).
 
 **Refresh contract:** `404 intent_not_found`; `409 no_receipt` (no receipt on the entry, e.g. rejected); `409 receipt_not_pending` when the receipt is already settled (`succeeded` / `failed` / `refunded`) — **409 instead of 200 `changed: false`** so clients know the intent is final and can read `GET /ledger`; `409 status_unsupported` when the adapter has no `status()` or the receipt rail differs; `502 status_check_failed` when `status()` throws or returns an invalid receipt (nothing stored).
+
+**Resolve contract (operator, `POST /intents/:id/resolve`):** for pending receipts that `status()` cannot settle, e.g. PayPal
+receipts with `meta.needsManualResolve: "true"` (duplicate `sender_batch_id` guesses, 5xx / network errors with no batch id,
+batches with 2+ items). The route never calls the adapter (`pay()` or `status()`); it only writes the ledger.
+- Body: `status` required, one of `succeeded` / `failed` / `refunded` (`pending` is rejected); `note` required, non-empty
+  (≤1000 chars); `externalId` optional (≤256 chars, replaces the stored rail id, e.g. the real PayPal batch id; omitted =
+  keep it); `resolvedBy` optional operator name (≤128 chars, default `"operator"`). Unknown fields → 400.
+- Ledger: the receipt gets the new `status` / `externalId` / `at` (other receipt fields such as `meta` are kept), and the
+  entry gets `resolution: {status, resolvedBy, note, at, previousExternalId}`.
+- Daily total: `failed` also marks the payment failed, so the amount is freed; `succeeded` and `refunded` keep counting
+  (same rule as `countsTowardDailyTotal`: refunds do not free budget).
+- Response `200`: `{intentId, decision, status: "paid"|"failed", receipt, changed: true, resolution, error?}`
+  (`error: "payment_failed: resolved as failed by <resolvedBy>"` for `failed`).
+- Errors: `400 invalid_body` / `invalid_json`; `404 intent_not_found`; `409 no_receipt`; `409 receipt_not_pending`
+  (already settled, including a second resolve).
+- No auth: like the rest of this demo API it is meant for localhost only; `resolvedBy` is self-reported.
 
 **Status codes:** `400` `invalid_body` / `invalid_json` / `invalid_path`; `404` `not_found` (route) or
 `intent_not_found`; `405` `method_not_allowed` (with `Allow`); `409` `already_paid`, `not_pending`, `in_progress`,
