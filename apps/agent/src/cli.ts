@@ -13,8 +13,8 @@ Options:
   --agent-id <id>          Agent id (default: demo-agent)
   --task <text>            Task description for the planner
   --scenario <name>        Built-in demo task: small | over-limit | needs-approval
-  --timeout-ms <n>         Approval poll timeout (default: 120000)
-  --poll-ms <n>            Ledger poll interval (default: 1000)
+  --timeout-ms <n>         Approval wait and pending-receipt wait timeout (default: 120000)
+  --poll-ms <n>            Ledger / refresh poll interval (default: 1000)
   --auto-approve-as <name> DEMO ONLY: simulate the human by calling POST /intents/:id/approve
                            from this CLI after the "waiting for human approval" step
   --approve-delay-ms <n>   Pause before the simulated approval (default: 1000)

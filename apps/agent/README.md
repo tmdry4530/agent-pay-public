@@ -27,8 +27,8 @@ Use `npm run -s ...` to hide npm's own banner and its error footer on non-zero e
 | `--scenario <name>` | | `small`, `over-limit`, or `needs-approval` (mutually exclusive with a task) |
 | `--api <url>` | `http://127.0.0.1:8787` | API base URL |
 | `--agent-id <id>` | `demo-agent` | `agentId` on the intent |
-| `--timeout-ms <n>` | `120000` | How long to wait for a human decision |
-| `--poll-ms <n>` | `1000` | `GET /ledger` poll interval while waiting |
+| `--timeout-ms <n>` | `120000` | How long to wait for a human decision, and (separately) for a pending receipt to settle |
+| `--poll-ms <n>` | `1000` | `GET /ledger` poll interval while waiting for approval; `POST /intents/:id/refresh` interval while a receipt is pending |
 | `--auto-approve-as <name>` | | **Demo only: simulates the human.** After printing the "waiting for human approval" step, the CLI itself calls `POST /intents/:id/approve {"approver": name}`. The API cannot tell it apart from a real approval. |
 | `--approve-delay-ms <n>` | `1000` | Pause before the simulated approval, so the wait is visible on screen |
 | `--json` | off | NDJSON output (below) |
