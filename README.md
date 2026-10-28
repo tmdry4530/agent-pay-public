@@ -5,10 +5,25 @@ Hackathon project: NEAR HACKATHON (main) + PayPal AI. Plan: internal hackathon p
 - apps/web: demo UI (개발팀2)
 Rules: local only. No remote, no push, no accounts, no secrets in repo. TS + node --test.
 - apps/api: HTTP API over core (node:http, no deps) (개발팀1)
+- apps/agent: demo task-agent CLI (planner + API client)
 
 ```sh
-npm install && npm test && npm run typecheck   # all workspaces (core + api)
+npm install && npm test && npm run typecheck   # all workspaces (core + adapters + api + agent)
 npm start -w @agent-pay/api                    # http://127.0.0.1:8787, RAIL=mock
+npm run agent -w @agent-pay/agent -- --scenario small
+```
+
+## Agent CLI (apps/agent)
+
+Demo task agent: task → `Planner` quote → `POST /intents` → wait for a human on `needs_approval` (polls
+`GET /ledger`). Scenarios `small` (10 USD, paid), `over-limit` (150 USD, rejected), `needs-approval` (75 USD,
+approved by a human, paid). `--auto-approve-as <name>` makes the CLI call `/approve` itself: it simulates the
+human for demos. `--json` prints NDJSON (step events, then one summary line). Exit codes: 0 paid, 2 rejected,
+3 approval timeout, 1 error/failed. Details: [apps/agent/README.md](apps/agent/README.md).
+
+```sh
+npm run agent -w @agent-pay/agent -- --scenario needs-approval --auto-approve-as alice
+npm run agent -w @agent-pay/agent -- "buy 1M tokens of GPT inference" --json
 ```
 
 ## API (apps/api)
