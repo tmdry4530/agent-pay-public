@@ -1,6 +1,6 @@
 # agent-pay web demo
 
-Single-screen Vite + React demo for **agent-pay**: an AI agent pays on behalf of a user within a configurable spending policy (NEAR agent economy + PayPal AI hackathon narrative).
+Single-screen Vite + React demo for **agent-pay**: an AI agent pays on behalf of a user within a configurable spending policy.
 
 ## Requirements
 

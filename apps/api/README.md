@@ -71,14 +71,14 @@ HTTP errors: they come back as `status: "rejected"` results.
 adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type` and `Max-Age: 600`. Other origins
 get no CORS headers.
 
-## Adapter registry (개발팀3 hook)
+## Adapter registry
 `apps/api/src/adapters.ts`:
 ```ts
 type AdapterFactory = (ctx: { env; now: () => Date }) => PaymentAdapter | Promise<PaymentAdapter>;
 export const adapterRegistry: Record<Rail, AdapterFactory | undefined> = {
   mock: (ctx) => createMockAdapter(ctx),     // apps/api mock: always succeeded
-  paypal: paypalFactory,                     // createPayPalAdapter(payPalConfigFromEnv(ctx.env)) from @agent-pay/adapters
-  near: nearFactory,
+  paypal: paypalFactory,                     // createPayPalAdapter(payPalConfigFromEnv(ctx.env)): Payouts v1 sandbox
+  near: nearFactory,                         // createNearAdapter + JSON-RPC client from nearConfigFromEnv(ctx.env): testnet native transfer
 };
 ```
-Wire a rail by replacing its `undefined` with a factory. `createAdapter(rail, ctx)` throws `adapter_not_wired` for an empty slot and `adapter_mismatch` if the factory returns an adapter for a different rail. PayPal here is **Payouts v1** (`createPayPalAdapter`), not Orders v2.
+All three rails are wired. `createAdapter(rail, ctx)` still throws `adapter_not_wired` for a slot left `undefined` and `adapter_mismatch` if the factory returns an adapter for a different rail. When a factory's env config fails, it throws `AdapterConfigError` with `missing` set to the unset names from `RAIL_REQUIRED_ENV` (`paypal`: `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`; `near`: `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`), which `startup-error.ts` prints. PayPal here is **Payouts v1** (`createPayPalAdapter`), not Orders v2; the Orders v2 module (`paypal-orders`) is not in the registry, so `RAIL=paypal-orders` is `unknown_rail`. Neither `paypal` nor `near` implements refund.

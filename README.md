@@ -25,7 +25,8 @@ agent-pay puts a small, auditable layer between the agent and the payment rail:
   Replaying the same intent returns the stored result instead of paying again.
 - **Human approval.** Intents above the threshold wait until a person approves or rejects them over HTTP.
   Hard limits are checked again at approval time.
-- **Adapters.** Only approved intents reach a rail adapter (`mock` or PayPal sandbox).
+- **Adapters.** Only approved intents reach a rail adapter: `mock` (default), `paypal` (PayPal Payouts v1
+  sandbox) or `near` (NEAR testnet native transfer).
 - **Reconciliation.** Receipts the rail reports as `pending` can be refreshed later. A receipt that turns out
   `failed` is marked failed and no longer counts toward the daily total.
 
@@ -45,8 +46,8 @@ flowchart LR
   end
   subgraph adapters["packages/adapters"]
     mock["mock"]
-    paypal["paypal (sandbox)"]
-    near["near (not wired yet)"]
+    paypal["paypal<br/>(Payouts v1 sandbox)"]
+    near["near<br/>(testnet native transfer)"]
   end
   agent -- HTTP --> routes
   human -- "HTTP approve / reject" --> routes
@@ -55,18 +56,21 @@ flowchart LR
   orchestrator --> ledger
   orchestrator -- "pay() / status()" --> mock
   orchestrator -- "pay() / status()" --> paypal
-  orchestrator -.-> near
+  orchestrator -- "pay() / status()" --> near
 ```
 
 | Package | What it does | Docs |
 |---|---|---|
 | `packages/core` | Types, policy engine, ledger, orchestrator, reconciliation. No runtime deps. | [packages/core/README.md](packages/core/README.md) |
-| `packages/adapters` | `mock` and PayPal sandbox (Orders v2) rail adapters. | [packages/adapters/README.md](packages/adapters/README.md) |
+| `packages/adapters` | `mock`, PayPal Payouts v1 (`paypal`), PayPal Orders v2 (`paypal-orders`) and NEAR (`near`) rail adapters. | [packages/adapters/README.md](packages/adapters/README.md) |
 | `apps/api` | HTTP API over core. Env vars, endpoints, status codes. | [apps/api/README.md](apps/api/README.md) |
 | `apps/agent` | Demo task-agent CLI: task → quote → intent → approval wait → receipt wait. | [apps/agent/README.md](apps/agent/README.md) |
 
-The `near` rail slot exists in the API's adapter registry but has no adapter yet: `RAIL=near` exits at startup
-with `adapter_not_wired`.
+The API serves three rails, chosen with `RAIL`. `paypal` sends a Payouts v1 sandbox payout to an email payee;
+`near` signs one native NEAR transfer on testnet. Neither supports refunds. The Orders v2 adapter (`paypal-orders`)
+lives in `packages/adapters` only; it is not a server rail, so `RAIL=paypal-orders` exits 1 with `unknown_rail`.
+`GET /rail` reports the rail, currency and logical payee → address map; the agent planner stays rail-agnostic and
+uses it to map its quotes (details in [apps/api/README.md](apps/api/README.md#per-rail-demo-seed)).
 
 Project description and demo video script: [docs/submission/](docs/submission/).
 
@@ -99,14 +103,15 @@ npm run agent -w @agent-pay/agent -- --scenario over-limit
 npm run agent -w @agent-pay/agent -- --scenario needs-approval --auto-approve-as alice
 ```
 
-The agent first calls `GET /health` and prints `server: http://127.0.0.1:8787 rail=mock`; if the API is not
-reachable it exits 1 immediately. `--rail <name>` makes it exit 1 when the server runs a different rail.
+The agent first calls `GET /health` (if the API is not reachable it exits 1 immediately), then reads the rail
+once from `GET /rail` and prints `server: http://127.0.0.1:8787 rail=mock`. `--rail <name>` makes it exit 1 when
+the server runs a different rail.
 Add `--json` for NDJSON output, or use `npm run -s agent ...` to hide npm's banner and its error footer on a
 non-zero exit.
 
 ## Scenarios
 
-The API starts with this policy for `demo-agent`: per-transaction max 100 USD, daily max 200 USD, approval
+On the `mock` rail the API starts with this policy for `demo-agent`: per-transaction max 100 USD, daily max 200 USD, approval
 required above 50 USD, payees `openai-api`, `anthropic-api`, `vercel`, `near-compute`. The agent's rule-based
 planner quotes 10 USD per 1M GPT tokens. Intent ids and receipt ids below are random per run.
 
@@ -193,7 +198,7 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
   total. Running it again writes nothing. The agent polls refresh after a paid result with a pending receipt.
   Details: [apps/api/README.md](apps/api/README.md), [packages/core/README.md](packages/core/README.md).
 - **No secrets in the repo.** The default `mock` rail needs no credentials, and the agent makes no LLM or other
-  paid API calls. PayPal sandbox credentials are read only from your shell environment.
+  paid API calls. PayPal and NEAR credentials are read only from your shell environment.
 - **Environment variables** (API; full table in [apps/api/README.md](apps/api/README.md)):
 
   | Var | Default | |
@@ -201,10 +206,12 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
   | `PORT` | `8787` | `0` picks a random port |
   | `HOST` | `127.0.0.1` | Bind address (local only by default) |
   | `LEDGER_PATH` | `apps/api/.data/ledger.json` | Ledger file; one writer process per file |
-  | `RAIL` | `mock` | `mock` or `paypal` (`near` is not wired yet) |
+  | `RAIL` | `mock` | `mock`, `paypal` (Payouts v1 sandbox) or `near` (NEAR testnet native transfer) |
   | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL` | | Only for `RAIL=paypal` (sandbox) |
+  | `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK`, `NEAR_RPC_URL` | | Only for `RAIL=near` (`NEAR_NETWORK` defaults to `testnet`) |
+  | `DEMO_PAYEES` | | Optional for `paypal` / `near`: `name=address,...` replaces the default payee map |
 
-  All names are in [.env.example](.env.example). With `RAIL=paypal` and a required var unset, the API exits 1 and
+  All names are in [.env.example](.env.example). With `RAIL=paypal` or `RAIL=near` and a required var unset, the API exits 1 and
   lists the missing names (never values), e.g.
   `missing required env vars for RAIL=paypal: PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET`.
 

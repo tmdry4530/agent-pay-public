@@ -105,8 +105,8 @@ run):
 
 End card: "agent-pay: policy-guarded payments for AI agents."
 
-**Narration (77 words / max 87):**
+**Narration (71 words / max 87):**
 The same API serves a task-agent CLI. Given "buy 1M tokens of GPT inference", a rule-based planner quotes ten
 dollars to openai-api and submits the intent. With the json flag, every step is one JSON line, ending in a
-summary with the status, receipt, and exit code: zero for paid, two for rejected, three if a wait times out. Next
-up: a NEAR rail, which is not wired yet, and PayPal payments that need no buyer approval.
+summary with the status, receipt, and exit code: zero for paid, two for rejected, three if a wait times out. The
+same run works on PayPal sandbox payouts and NEAR testnet transfers.
