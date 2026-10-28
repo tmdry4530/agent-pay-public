@@ -4,14 +4,18 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/api",
+    "apps/agent"
   ],
   "engines": {
     "node": ">=23.6"
   },
   "scripts": {
-    "test": "npm test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "demo": "node scripts/demo.mjs",
+    "demo:record": "node scripts/record-demo.mjs",
+    "test": "npm test --workspaces --if-present && pnpm -C apps/web test",
+    "typecheck": "npm run typecheck --workspaces --if-present && pnpm -C apps/web typecheck",
+    "web:install": "pnpm -C apps/web install --frozen-lockfile"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -3,7 +3,8 @@ import type { PaymentIntent, Policy, Rail } from '@agent-pay/core';
 import { approve, reject, runPayment } from '@agent-pay/core/orchestrator.ts';
 import type { AgentPayClient, IntentDraft, LedgerSnapshot } from './agentPayClient';
 import { countsTowardDailyTotal, MemoryLedger, utcDay } from './memoryLedger';
-import { createMockAdapters } from './rails/mockAdapters';
+import { refreshIntent } from './refreshIntent';
+import { createMockAdapters, type PendingSettlementConfig } from './rails/mockAdapters';
 
 /** Demo policy aligned with the reference API DEFAULT_POLICY. */
 export const DEMO_POLICY: Policy = {
@@ -19,6 +20,7 @@ export type InMemoryClientOptions = {
   policy?: Policy;
   now?: () => Date;
   newId?: () => string;
+  pendingSettlement?: PendingSettlementConfig;
 };
 
 const DEFAULT_APPROVER = 'demo-operator';
@@ -28,7 +30,11 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
   const newId = options.newId ?? (() => crypto.randomUUID());
   const policy = options.policy ?? DEMO_POLICY;
   const ledger = new MemoryLedger({ now });
-  const adapters = createMockAdapters({ now, newId });
+  const adapters = createMockAdapters({
+    now,
+    newId,
+    pendingSettlement: options.pendingSettlement,
+  });
   const railsByIntent = new Map<string, Rail>();
 
   const asCoreLedger = ledger as unknown as Ledger;
@@ -87,6 +93,11 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
         approver: opts.approver ?? DEFAULT_APPROVER,
         note: opts.note,
       });
+    },
+
+    async refresh(intentId: string) {
+      const rail = railsByIntent.get(intentId) ?? 'mock';
+      return refreshIntent(intentId, ledger, adapters[rail]);
     },
 
     async getLedger() {
