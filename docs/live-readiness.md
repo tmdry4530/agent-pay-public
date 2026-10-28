@@ -124,7 +124,7 @@ Env names to fill:
 | `NEAR_ACCOUNT_ID` | Yes, for `RAIL=near` and the NEAR integration test | The sender account ID, a lowercase name ending in `.testnet` (2 to 64 characters; letters, digits, `-`, `_`, `.`) |
 | `NEAR_PRIVATE_KEY` | Yes, for `RAIL=near` and the NEAR integration test | The sender's ed25519 private key in NEAR's text form: the `ed25519` prefix, a colon, then base58 text (a 32-byte seed or a 64-byte secret key). The code checks that it matches the account's key pair. |
 | `NEAR_NETWORK` | No | `testnet` (default) or `mainnet`. Leave empty or set it to `testnet` |
-| `NEAR_RPC_URL` | No | Leave empty to use the code's default testnet RPC (`https://rpc.testnet.near.org`). To switch, use a **testnet** endpoint from [RPC Providers](https://docs.near.org/api/rpc/providers), for example FASTNEAR's public testnet endpoint listed there. The code's default endpoint is not in that table (NEAR's archival testnet endpoint is, marked "severely rate limited"), so its availability and limits *need confirmation* |
+| `NEAR_RPC_URL` | No | Leave empty to use the default testnet RPC, FASTNEAR's `https://test.rpc.fastnear.com`. NEAR's [RPC Providers](https://docs.near.org/api/rpc/providers) page lists it under Testnet as a public endpoint with a free tier; its free-tier limit is "Not published". To switch, use another **testnet** endpoint from that page |
 | `NEAR_RECEIVER_ID` | Integration test only | The receiver account ID: a name ending in `.testnet` or a 64-character lowercase hex implicit account |
 | `DEMO_PAYEES` | No, but recommended for the demo | See [Demo payee map](#demo-payee-map-demo_payees) |
 
@@ -220,22 +220,38 @@ adapter is not a server rail, and it is not part of this checklist.
 
 ### Rail demos (API plus agent CLI)
 
-`npm run demo` (root script, `scripts/demo.mjs`) always starts the API with `RAIL=mock`, so it is **not** used
-for live rails. Use the API start script and the agent script in two terminals instead.
+Two ways to run a live rail: the API alone plus the agent CLI, or the full demo (API plus web UI).
 
-Terminal 1, start the API with `.env` loaded. `RAIL` can be set in `.env` or on the command line (an existing
-shell variable takes precedence over `--env-file`). A fresh `LEDGER_PATH` keeps runs separate:
+Terminal 1, start the API with the root script `npm run api`
+(`node --env-file-if-exists=.env apps/api/src/main.ts`). It loads `.env` when the file exists. `RAIL` can be set
+in `.env` or on the command line; an existing shell variable takes precedence over the file. A fresh
+`LEDGER_PATH` keeps runs separate:
 
 ```sh
-RAIL=paypal LEDGER_PATH=/tmp/agent-pay-paypal/ledger.json node --env-file=.env apps/api/src/main.ts
+RAIL=paypal LEDGER_PATH=/tmp/agent-pay-paypal/ledger.json npm run api
 # agent-pay api listening on http://127.0.0.1:8787 (rail=paypal, ledger=/tmp/agent-pay-paypal/ledger.json)
 
-RAIL=near LEDGER_PATH=/tmp/agent-pay-near/ledger.json node --env-file=.env apps/api/src/main.ts
+RAIL=near LEDGER_PATH=/tmp/agent-pay-near/ledger.json npm run api
 # agent-pay api listening on http://127.0.0.1:8787 (rail=near, ledger=/tmp/agent-pay-near/ledger.json)
 ```
 
 The API workspace's start script (`npm start -w @agent-pay/api`, which runs `node src/main.ts`) works too, but it
 does not load `.env` by itself. The variables must already be in the shell environment.
+
+Or run the full demo, which starts the API and the web UI on a fresh temporary ledger:
+
+```sh
+RAIL=paypal npm run demo
+RAIL=near npm run demo
+```
+
+- The demo's rail comes **only from the shell** `RAIL` (default `mock`); a `RAIL` line in `.env` is ignored by
+  the demo. A root `.env`, when present, is passed to the API for the credentials.
+- Ports: `DEMO_API_PORT` (default 8787) and `DEMO_WEB_PORT` (default 5173).
+- It prints `rail: <rail>` (plus `(api env file: .env)` when the file is used), then
+  `agent-pay demo ready: http://127.0.0.1:5173/  (api http://127.0.0.1:8787, rail=<rail>, ledger ...)`.
+- If the API cannot start, the demo prints the API's names-only message prefixed with `[api] `, then
+  `error: api exited unexpectedly (code 1)`, stops what it started, and exits 1. The web UI is not started.
 
 Terminal 2, run the agent against it with the rail check:
 
@@ -280,7 +296,7 @@ unknown value) exits 1 with `unknown_rail: RAIL must be one of mock|paypal|near`
    integration test (0.001 NEAR) and gas.
 4. How the chosen NEAR wallet exports a raw private key, as opposed to a seed phrase. The CLI export command is
    the documented route.
-5. Availability and rate limits of the code's default `NEAR_RPC_URL` (`https://rpc.testnet.near.org`), which
-   is not listed on NEAR's RPC providers page.
+5. The rate limit of the default testnet `NEAR_RPC_URL` (`https://test.rpc.fastnear.com`). NEAR's RPC providers
+   page lists its free-tier limit as "Not published".
 6. Whether the default NEAR demo payee `demo-merchant.testnet` exists on testnet. Setting `DEMO_PAYEES` avoids
    the question.
