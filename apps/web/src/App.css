@@ -458,6 +458,28 @@ dd {
   color: var(--warn);
 }
 
+.receipt-pending-notice {
+  margin: 0 0 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.btn-refresh {
+  margin-top: 0.85rem;
+}
+
+.refresh-note {
+  margin: 0.65rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .receipt-status--failed,
 .receipt-status--refunded {
   color: var(--danger);

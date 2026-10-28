@@ -41,6 +41,32 @@ describe('App smoke', () => {
     );
   });
 
+  it('pending settlement: PENDING badge, refresh settles receipt', async () => {
+    const user = userEvent.setup();
+    render(
+      <ClientProvider
+        client={createInMemoryClient({ pendingSettlement: { afterChecks: 2 } })}
+      >
+        <App />
+      </ClientProvider>,
+    );
+
+    await user.click(screen.getByTestId('scenario-approved'));
+    await user.click(screen.getByTestId('btn-quote'));
+    await user.click(screen.getByTestId('btn-policy'));
+
+    expect(await screen.findByTestId('receipt-status')).toHaveTextContent('pending');
+    expect(screen.getByText(/PENDING — awaiting rail confirmation/i)).toBeInTheDocument();
+    expect(screen.getByTestId('btn-refresh')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('btn-refresh'));
+    expect(await screen.findByTestId('refresh-note')).toHaveTextContent(/Still pending/i);
+
+    await user.click(screen.getByTestId('btn-refresh'));
+    expect(await screen.findByTestId('receipt-status')).toHaveTextContent('succeeded');
+    expect(screen.queryByTestId('btn-refresh')).not.toBeInTheDocument();
+  });
+
   it('accumulates spend and ledger across scenarios until reset', async () => {
     const user = userEvent.setup();
     renderApp();

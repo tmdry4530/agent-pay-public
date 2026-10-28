@@ -43,6 +43,8 @@ In HTTP mode the **rail is chosen by the API server** (one adapter per process);
 
 All payment rails (**Mock**, **PayPal**, **NEAR**) are **fully mocked**. No network calls, no real funds. Receipt external IDs use demo prefixes (`mock_…`, `MOCK-PAYPAL-ORDER-…`, `mock-near-tx-…`).
 
+To demo **pending settlement** (receipt stays `pending` until you click **Refresh status**), open the app with `?simulatePending=1` in the URL (mock client only). Pay returns a pending receipt; one **Refresh status** settles it to succeeded.
+
 ## Demo scenarios
 
 Aligned with the API default policy (`demo-agent`, daily max $200, per-tx max $100, approval above $50):

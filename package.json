@@ -10,6 +10,8 @@
     "node": ">=23.6"
   },
   "scripts": {
+    "demo": "node scripts/demo.mjs",
+    "demo:record": "node scripts/record-demo.mjs",
     "test": "npm test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

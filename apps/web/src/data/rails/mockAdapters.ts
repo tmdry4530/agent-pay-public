@@ -1,8 +1,14 @@
 import type { PaymentAdapter, PaymentIntent, Rail, Receipt } from '@agent-pay/core';
 
+export type PendingSettlementConfig = {
+  afterChecks: number;
+  outcome?: 'succeeded' | 'failed';
+};
+
 export type MockAdapterDeps = {
   now?: () => Date;
   newId?: () => string;
+  pendingSettlement?: PendingSettlementConfig;
 };
 
 function suffix(deps: MockAdapterDeps): string {
@@ -15,18 +21,36 @@ function createAdapter(
   deps: MockAdapterDeps,
 ): PaymentAdapter {
   const now = deps.now ?? (() => new Date());
-  return {
+  const pending = deps.pendingSettlement;
+  const statusCallCounts = new Map<string, number>();
+
+  const adapter: PaymentAdapter = {
     rail,
     async pay(intent: PaymentIntent): Promise<Receipt> {
       return {
         intentId: intent.id,
         rail,
         externalId: `${externalIdPrefix}${suffix(deps)}`,
-        status: 'succeeded',
+        status: pending ? 'pending' : 'succeeded',
         at: now().toISOString(),
       };
     },
   };
+
+  if (pending) {
+    adapter.status = async (receipt: Receipt): Promise<Receipt> => {
+      const key = receipt.externalId;
+      const n = (statusCallCounts.get(key) ?? 0) + 1;
+      statusCallCounts.set(key, n);
+      if (n < pending.afterChecks) {
+        return { ...receipt, status: 'pending' };
+      }
+      const outcome = pending.outcome ?? 'succeeded';
+      return { ...receipt, status: outcome };
+    };
+  }
+
+  return adapter;
 }
 
 /** Clearly mock PaymentAdapter implementations for demo rails. */

@@ -97,6 +97,13 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
       );
     },
 
+    refresh(intentId: string): Promise<PaymentResult & { changed: boolean }> {
+      return request<PaymentResult & { changed: boolean }>(
+        `/intents/${encodeURIComponent(intentId)}/refresh`,
+        { method: 'POST', body: '{}' },
+      );
+    },
+
     getLedger(): Promise<LedgerSnapshot> {
       return request<LedgerSnapshot>('/ledger');
     },

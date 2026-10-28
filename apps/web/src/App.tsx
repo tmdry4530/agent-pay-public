@@ -1,6 +1,7 @@
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
+import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError } from './data/apiError';
+import { ApiError, apiErrorCode } from './data/apiError';
 import type { IntentDraft } from './data/agentPayClient';
 import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
@@ -68,6 +69,11 @@ function splitReason(reason: string): { code: string; detail: string } {
   return { code: reason.slice(0, i), detail: reason.slice(i + 1).trim() };
 }
 
+function paymentErrorCode(err: unknown): string | undefined {
+  if (err instanceof PaymentError) return err.code;
+  return apiErrorCode(err);
+}
+
 function activeStepIndex(
   step: PipelineStep,
   result: PaymentResult | null,
@@ -98,6 +104,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [serverRail, setServerRail] = useState<string | null>(null);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const [refreshHidden, setRefreshHidden] = useState(false);
   const stepperRef = useRef<HTMLOListElement>(null);
 
   const refreshLedger = useCallback(async () => {
@@ -155,6 +163,8 @@ export default function App() {
     setResult(null);
     setStep('task');
     setError(null);
+    setRefreshNote(null);
+    setRefreshHidden(false);
   }, []);
 
   const selectScenario = (s: DemoScenario) => {
@@ -184,6 +194,8 @@ export default function App() {
     if (!draft) return;
     setBusy(true);
     setError(null);
+    setRefreshNote(null);
+    setRefreshHidden(false);
     try {
       const out = await client.submitIntent(draft, rail);
       setIntent(out.intent);
@@ -206,6 +218,8 @@ export default function App() {
     if (!intent) return;
     setBusy(true);
     setError(null);
+    setRefreshNote(null);
+    setRefreshHidden(false);
     try {
       const out = await client.approve(intent.id, DEFAULT_APPROVER);
       setResult(out);
@@ -244,6 +258,37 @@ export default function App() {
       clearRun();
       await refreshLedger();
       await refreshPolicy();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRefreshStatus = async () => {
+    if (!intent) return;
+    setBusy(true);
+    setError(null);
+    setRefreshNote(null);
+    try {
+      const out = await client.refresh(intent.id);
+      setResult(out);
+      await refreshLedger();
+      if (!out.changed) {
+        setRefreshNote(`Still pending (checked at ${formatTime(new Date().toISOString())})`);
+      }
+    } catch (e) {
+      const code = paymentErrorCode(e);
+      if (code === 'status_unsupported') {
+        setRefreshHidden(true);
+        setRefreshNote('Status check not supported on this rail');
+      } else if (code === 'receipt_not_pending') {
+        await refreshLedger();
+        setRefreshHidden(true);
+        setRefreshNote(null);
+      } else {
+        setError(
+          e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Refresh failed',
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -470,10 +515,18 @@ export default function App() {
                 <span className="mock-badge mock-badge--inline">MOCK — no real funds</span>
               )}
               <h3>Receipt</h3>
+              {result.receipt.status === 'pending' && (
+                <p className="receipt-pending-notice" role="status">
+                  PENDING — awaiting rail confirmation
+                </p>
+              )}
               <dl>
                 <div>
                   <dt>Status</dt>
-                  <dd className={`receipt-status receipt-status--${result.receipt.status}`}>
+                  <dd
+                    className={`receipt-status receipt-status--${result.receipt.status}`}
+                    data-testid="receipt-status"
+                  >
                     {result.receipt.status}
                   </dd>
                 </div>
@@ -490,6 +543,22 @@ export default function App() {
                   <dd>{formatTime(result.receipt.at)}</dd>
                 </div>
               </dl>
+              {result.receipt.status === 'pending' && !refreshHidden && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-refresh"
+                  data-testid="btn-refresh"
+                  disabled={busy}
+                  onClick={() => void handleRefreshStatus()}
+                >
+                  Refresh status
+                </button>
+              )}
+              {refreshNote && (
+                <p className="refresh-note" data-testid="refresh-note">
+                  {refreshNote}
+                </p>
+              )}
             </article>
           )}
         </section>

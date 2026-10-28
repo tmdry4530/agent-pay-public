@@ -31,6 +31,7 @@ export interface AgentPayClient {
     intentId: string,
     opts?: { approver?: string; note?: string },
   ): Promise<PaymentResult>;
+  refresh(intentId: string): Promise<PaymentResult & { changed: boolean }>;
   getLedger(): Promise<LedgerSnapshot>;
   getHealth?(): Promise<{ ok: boolean; rail: string }>;
   reset?(): Promise<void>;
