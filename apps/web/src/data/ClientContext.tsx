@@ -1,16 +1,10 @@
-import {
-  createContext,
-  useContext,
-  useRef,
-  type ReactNode,
-} from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   createInMemoryClient,
   type AgentPayClient,
   type InMemoryClientOptions,
 } from './inMemoryClient';
-
-const ClientContext = createContext<AgentPayClient | null>(null);
+import { AgentPayClientContext } from './agentPayClientContext';
 
 export function ClientProvider({
   children,
@@ -30,14 +24,8 @@ export function ClientProvider({
   const client = injected ?? clientRef.current!;
 
   return (
-    <ClientContext.Provider value={client}>{children}</ClientContext.Provider>
+    <AgentPayClientContext.Provider value={client}>
+      {children}
+    </AgentPayClientContext.Provider>
   );
-}
-
-export function useAgentPayClient(): AgentPayClient {
-  const client = useContext(ClientContext);
-  if (!client) {
-    throw new Error('useAgentPayClient must be used within ClientProvider');
-  }
-  return client;
 }

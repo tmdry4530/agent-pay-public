@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useAgentPayClient } from './data/ClientContext';
+import { useCallback, useMemo, useReducer, useState } from 'react';
+import { useAgentPayClient } from './data/useAgentPayClient';
 import {
   DEMO_SCENARIOS,
   type DemoScenario,
@@ -46,6 +46,15 @@ function formatTime(iso: string): string {
   });
 }
 
+function receiptRailLabel(rail: Rail): string {
+  const labels: Record<Rail, string> = {
+    mock: 'Mock',
+    paypal: 'PayPal (mock)',
+    near: 'NEAR (mock)',
+  };
+  return labels[rail];
+}
+
 function activeStepIndex(
   step: PipelineStep,
   decision: Decision | null,
@@ -73,37 +82,35 @@ export default function App() {
   const [rail, setRail] = useState<Rail>('mock');
   const [step, setStep] = useState<PipelineStep>('task');
   const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
+  const [, bumpLedgerView] = useReducer((n: number) => n + 1, 0);
 
-  const spend = useMemo(() => client.getSpend(), [client, tick]);
+  const spend = client.getSpend();
   const policy = client.getPolicy();
-  const ledger = useMemo(() => client.getLedger(), [client, tick]);
+  const ledger = client.getLedger();
   const humanOutcome = intent
     ? client.getHumanOutcome(intent.id)
     : undefined;
 
-  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  const refresh = useCallback(() => bumpLedgerView(), []);
+
+  const clearPerRunUi = useCallback(() => {
+    setIntent(null);
+    setDecision(null);
+    setReceipt(null);
+    setStep('task');
+    setError(null);
+  }, []);
 
   const resetUi = useCallback(() => {
     client.reset();
     setScenario(null);
-    setIntent(null);
-    setDecision(null);
-    setReceipt(null);
-    setStep('task');
-    setError(null);
+    clearPerRunUi();
     refresh();
-  }, [client, refresh]);
+  }, [client, clearPerRunUi, refresh]);
 
   const selectScenario = (s: DemoScenario) => {
-    client.reset();
     setScenario(s);
-    setIntent(null);
-    setDecision(null);
-    setReceipt(null);
-    setStep('task');
-    setError(null);
-    refresh();
+    clearPerRunUi();
   };
 
   const handleQuote = () => {
@@ -197,8 +204,8 @@ export default function App() {
   const runAuto = async () => {
     const sc = scenario ?? DEMO_SCENARIOS[0];
     setError(null);
-    client.reset();
     setScenario(sc);
+    clearPerRunUi();
     const created = client.createIntent(sc.task);
     setIntent(created);
     const d = client.evaluate(created.id);
@@ -401,7 +408,7 @@ export default function App() {
                 </div>
                 <div>
                   <dt>Rail</dt>
-                  <dd>{receipt.rail}</dd>
+                  <dd>{receiptRailLabel(receipt.rail)}</dd>
                 </div>
                 <div>
                   <dt>External ID</dt>
