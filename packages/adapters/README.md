@@ -4,6 +4,8 @@ Payment rail adapters for agent-pay: in-memory mock payments and PayPal sandbox 
 
 Types (`PaymentIntent`, `Receipt`, `PaymentAdapter`, etc.) come from `@agent-pay/core`.
 
+Adapter-only types in `adapter-types.ts` extend receipts with optional string `meta` for rail-specific details (never secrets). Core `Receipt` does not define `meta` yet; the API ledger may omit it when persisting until core adds the field.
+
 ## Adapters
 
 | Module | Export | Rail | Purpose |

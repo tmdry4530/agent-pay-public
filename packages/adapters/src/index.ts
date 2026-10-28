@@ -20,3 +20,4 @@ export {
   type PayPalErrorCode,
 } from './paypal.ts';
 export { createPayPalOrdersAdapter } from './paypal-orders.ts';
+export type { AdapterReceipt, StatusCapableAdapter } from './adapter-types.ts';

@@ -1,4 +1,5 @@
-import type { PaymentAdapter, PaymentIntent, Receipt, ReceiptStatus } from '@agent-pay/core';
+import type { PaymentIntent, Receipt, ReceiptStatus } from '@agent-pay/core';
+import type { AdapterReceipt, StatusCapableAdapter } from './adapter-types.ts';
 import { AdapterValidationError, validateIntent } from './validate.ts';
 import {
   createPayPalHttp,
@@ -103,7 +104,7 @@ function receiptFromBatchBody(
   body: PayoutCreateResponse | PayoutBatchResponse,
   at: string,
   extraMeta?: Record<string, string>,
-): Receipt {
+): AdapterReceipt {
   const batchHeader = body.batch_header;
   const payoutBatchId = batchHeader?.payout_batch_id ?? '';
   const batchStatus = batchHeader?.batch_status ?? '';
@@ -166,11 +167,11 @@ function extractBatchIdFromDuplicateError(
   return match?.[1] ?? null;
 }
 
-export function createPayPalAdapter(config: PayPalConfig): PaymentAdapter {
+export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter {
   const http = createPayPalHttp(config);
   const { nowMs, onError, apiCall } = http;
 
-  async function getPayoutBatch(batchId: string, intentId: string): Promise<Receipt> {
+  async function getPayoutBatch(batchId: string, intentId: string): Promise<AdapterReceipt> {
     const at = new Date(nowMs()).toISOString();
     let response: Response;
     try {
@@ -204,7 +205,7 @@ export function createPayPalAdapter(config: PayPalConfig): PaymentAdapter {
   return {
     rail: 'paypal',
 
-    async pay(intent: PaymentIntent): Promise<Receipt> {
+    async pay(intent: PaymentIntent): Promise<AdapterReceipt> {
       validateIntent(intent);
       if (!isValidEmail(intent.payee)) {
         throw new AdapterValidationError('payee', 'payee must be a valid email address');
@@ -212,7 +213,7 @@ export function createPayPalAdapter(config: PayPalConfig): PaymentAdapter {
 
       const at = new Date(nowMs()).toISOString();
 
-      const fail = (error: unknown, op: 'token' | 'payout'): Receipt => {
+      const fail = (error: unknown, op: 'token' | 'payout'): AdapterReceipt => {
         onError?.(error, { intentId: intent.id, op });
         return {
           intentId: intent.id,
@@ -226,7 +227,7 @@ export function createPayPalAdapter(config: PayPalConfig): PaymentAdapter {
       const pendingUnknown = (
         error: unknown,
         extraMeta?: Record<string, string>,
-      ): Receipt => {
+      ): AdapterReceipt => {
         onError?.(error, { intentId: intent.id, op: 'payout' });
         return {
           intentId: intent.id,
@@ -325,7 +326,7 @@ export function createPayPalAdapter(config: PayPalConfig): PaymentAdapter {
       return receiptFromBatchBody(intent.id, body, at);
     },
 
-    async status(receipt: Receipt): Promise<Receipt> {
+    async status(receipt: Receipt): Promise<AdapterReceipt> {
       if (receipt.rail !== 'paypal') {
         throw new Error('Cannot check status for a receipt from another rail');
       }

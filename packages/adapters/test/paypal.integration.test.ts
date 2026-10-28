@@ -32,7 +32,7 @@ test(
     assert.ok(['succeeded', 'pending', 'failed'].includes(receipt.status));
 
     if (receipt.externalId !== '') {
-      const updated = await adapter.status!(receipt);
+      const updated = await adapter.status(receipt);
       assert.equal(updated.intentId, intent.id);
       assert.equal(updated.rail, 'paypal');
       assert.equal(updated.externalId, receipt.externalId);

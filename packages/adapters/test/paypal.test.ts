@@ -284,7 +284,7 @@ describe('contract', () => {
       },
     ]);
     const statusAdapter = createPayPalAdapter(adapterConfig(statusFetch));
-    const updated = await statusAdapter.status!({
+    const updated = await statusAdapter.status({
       intentId: 'r1',
       rail: 'paypal',
       externalId: 'B-REF',
@@ -617,7 +617,7 @@ describe('status()', () => {
       status: 'pending',
       at: '2026-01-01T00:00:00.000Z',
     };
-    const out = await adapter.status!(input);
+    const out = await adapter.status(input);
     assert.equal(out.status, 'succeeded');
     assert.equal(out.meta?.payoutItemId, 'PI-99');
     assert.match(calls[1]?.url ?? '', /BATCH-ST/);
@@ -641,7 +641,7 @@ describe('status()', () => {
       },
     ]);
     const adapter = createPayPalAdapter(adapterConfig(fetchMock, (e) => errors.push(e)));
-    const out = await adapter.status!(input);
+    const out = await adapter.status(input);
     assert.deepEqual(out, input);
     assert.ok(errors[0] instanceof PayPalApiError);
   });
@@ -656,7 +656,7 @@ describe('status()', () => {
       status: 'pending',
       at: '2026-01-01T00:00:00.000Z',
     };
-    const out = await adapter.status!(input);
+    const out = await adapter.status(input);
     assert.deepEqual(out, input);
     assert.equal(calls.length, 0);
   });
@@ -666,7 +666,7 @@ describe('status()', () => {
     const adapter = createPayPalAdapter(adapterConfig(fetchMock));
     await assert.rejects(
       () =>
-        adapter.status!({
+        adapter.status({
           intentId: 'i',
           rail: 'mock',
           externalId: 'x',
