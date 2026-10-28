@@ -91,10 +91,13 @@ instead of paying twice.
 **On screen:** Terminal. Run:
 
 ```sh
-npm run -s agent -w @agent-pay/agent -- --scenario small --json
+npm run -s agent -- --scenario small --json
 ```
 
-NDJSON scrolls by: `task`, `quote`, `submit_intent`, `intent_result` step events, then one `summary` line.
+(`-s` keeps npm's `> agent` banner out of the NDJSON. The recorded `docs/demo/agent-pay-submission.webm` shows the
+equivalent workspace form `npm run -s agent -w @agent-pay/agent -- --scenario small --json`.)
+
+NDJSON scrolls by: `health`, `task`, `quote`, `submit_intent`, `intent_result` step events, then one `summary` line.
 Highlight `"apiStatus":"paid"` and `"exitCode":0`. Excerpt from a real local run (ids and timestamps differ per
 run):
 
@@ -105,8 +108,8 @@ run):
 
 End card: "agent-pay: policy-guarded payments for AI agents."
 
-**Narration (77 words / max 87):**
+**Narration (71 words / max 87):**
 The same API serves a task-agent CLI. Given "buy 1M tokens of GPT inference", a rule-based planner quotes ten
 dollars to openai-api and submits the intent. With the json flag, every step is one JSON line, ending in a
-summary with the status, receipt, and exit code: zero for paid, two for rejected, three if a wait times out. Next
-up: a NEAR rail, which is not wired yet, and PayPal payments that need no buyer approval.
+summary with the status, receipt, and exit code: zero for paid, two for rejected, three if a wait times out. The
+same run works on PayPal sandbox payouts and NEAR testnet transfers.

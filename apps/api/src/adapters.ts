@@ -20,8 +20,35 @@ export interface AdapterContext {
 /** Builds the adapter for one rail. May be async (e.g. to fetch an OAuth token). */
 export type AdapterFactory = (ctx: AdapterContext) => PaymentAdapter | Promise<PaymentAdapter>;
 
+/**
+ * Env var NAMES each credentialed rail requires (mirrors payPalConfigFromEnv / nearConfigFromEnv in
+ * packages/adapters, which throw on the first blank one). Optional ones (PAYPAL_BASE_URL, NEAR_NETWORK,
+ * NEAR_RPC_URL) are not listed.
+ */
+export const RAIL_REQUIRED_ENV: Readonly<Partial<Record<Rail, readonly string[]>>> = {
+  paypal: ['PAYPAL_CLIENT_ID', 'PAYPAL_CLIENT_SECRET'],
+  near: ['NEAR_ACCOUNT_ID', 'NEAR_PRIVATE_KEY'],
+};
+
+export interface AdapterConfigErrorOptions {
+  cause?: unknown;
+  /** Names (never values) of required env vars that are blank. Read by startup-error.ts. */
+  missing?: readonly string[];
+}
+
 export class AdapterConfigError extends Error {
   override name = 'AdapterConfigError';
+  /** Names of missing required env vars, when the failure is missing configuration. */
+  readonly missing?: readonly string[];
+  constructor(message: string, options: AdapterConfigErrorOptions = {}) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    if (options.missing && options.missing.length > 0) this.missing = [...options.missing];
+  }
+}
+
+/** Required env names for `rail` that are unset or blank in `env`. */
+export function missingRequiredEnv(rail: Rail, env: AdapterContext['env']): string[] {
+  return (RAIL_REQUIRED_ENV[rail] ?? []).filter((name) => (env[name] ?? '').trim() === '');
 }
 
 /** Mock rail: every payment succeeds immediately. For demos and tests only. */
@@ -54,7 +81,9 @@ export const paypalFactory: AdapterFactory = (ctx) => {
   try {
     config = payPalConfigFromEnv({ ...ctx.env });
   } catch (err) {
-    throw new AdapterConfigError(`adapter_config: ${err instanceof Error ? err.message : String(err)} (RAIL=paypal)`);
+    throw new AdapterConfigError(`adapter_config: ${err instanceof Error ? err.message : String(err)} (RAIL=paypal)`, {
+      missing: missingRequiredEnv('paypal', ctx.env),
+    });
   }
   return createPayPalAdapter(config);
 };
@@ -64,7 +93,9 @@ export const nearFactory: AdapterFactory = (ctx) => {
   try {
     config = nearConfigFromEnv({ ...ctx.env });
   } catch (err) {
-    throw new AdapterConfigError(`adapter_config: ${err instanceof Error ? err.message : String(err)} (RAIL=near)`);
+    throw new AdapterConfigError(`adapter_config: ${err instanceof Error ? err.message : String(err)} (RAIL=near)`, {
+      missing: missingRequiredEnv('near', ctx.env),
+    });
   }
   let client;
   try {
@@ -79,11 +110,7 @@ export const nearFactory: AdapterFactory = (ctx) => {
   return createNearAdapter({ client, networkId: config.networkId, now: ctx.now });
 };
 
-/**
- * Rail -> factory. `undefined` means the rail is known but not wired yet.
- * 개발팀3: wire a rail by replacing its `undefined` with a factory, e.g.
- *   near: nearFactory (createNearAdapter + nearConfigFromEnv from @agent-pay/adapters),
- */
+/** Rail -> factory. `undefined` means the rail is known but not wired yet (all three are wired now). */
 export const adapterRegistry: Record<Rail, AdapterFactory | undefined> = {
   mock: (ctx) => createMockAdapter(ctx),
   paypal: paypalFactory,

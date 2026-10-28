@@ -1,5 +1,5 @@
 import type { LedgerEntry, PaymentResult, Receipt } from '@agent-pay/core';
-import { ApiClientError, getLedger, getRail, postApprove, postIntent, postRefresh } from './client.ts';
+import { ApiClientError, getHealth, getLedger, getRail, postApprove, postIntent, postRefresh, type RailInfo } from './client.ts';
 import { createPlanner, type Planner, type Quote } from './planner.ts';
 import { SCENARIOS, isScenarioName, type ScenarioName } from './scenarios.ts';
 
@@ -8,6 +8,7 @@ export type AgentFinalStatus = 'paid' | 'rejected' | 'approval_timeout' | 'faile
 
 /** Step names, in the order they can appear. */
 export type AgentStep =
+  | 'health'
   | 'task'
   | 'quote'
   | 'rail'
@@ -70,6 +71,10 @@ export interface RunAgentOptions {
   approveDelayMs?: number;
   /** Defaults to RuleBasedPlanner. Plug an LLM planner in here. */
   planner?: Planner;
+  /** Call GET /health before anything else and fail fast (exit 1) if the API is down. Default true. */
+  healthCheck?: boolean;
+  /** Expected server rail (CLI --rail). If GET /health reports a different rail, finish 'error' (exit 1). */
+  expectedRail?: string;
 }
 
 export interface RunAgentResult {
@@ -126,7 +131,8 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
     const event: AgentStepEvent = { type: 'step', step: name, ts: new Date().toISOString(), message, ...extra };
     if (ctx.intentId && event.intentId === undefined) event.intentId = ctx.intentId;
     emitHook(event);
-    writeLine(json ? JSON.stringify(event) : `[${name}] ${message}`);
+    // The health line is printed bare in human mode: `server: <url> rail=<rail>`.
+    writeLine(json ? JSON.stringify(event) : name === 'health' ? message : `[${name}] ${message}`);
   };
 
   const finish = (status: AgentFinalStatus, extra: Partial<RunAgentResult> = {}): RunAgentResult => {
@@ -224,6 +230,39 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
     }
   };
 
+  // 0. Health: fail fast if the API is down, and show (or check) the server's rail.
+  //    GET /rail is fetched once here and reused for the payee/amount mapping below, so the displayed rail,
+  //    the --rail check and the mapping all come from the same server answer (one source of truth).
+  let railInfo: RailInfo | undefined;
+  let railInfoFetched = false;
+  if (options.healthCheck !== false) {
+    const apiUrl = options.apiUrl.replace(/\/+$/, '');
+    let healthRail: string | undefined;
+    try {
+      const health = await getHealth(apiUrl);
+      healthRail = typeof health.rail === 'string' && health.rail !== '' ? health.rail : undefined;
+    } catch (err) {
+      return fail(err);
+    }
+    railInfo = await getRail(apiUrl); // best-effort: undefined on servers without /rail
+    railInfoFetched = true;
+    if (railInfo && healthRail !== undefined && railInfo.rail !== healthRail) {
+      return fail(new Error(`rail_inconsistent: GET /health reports rail=${healthRail} but GET /rail reports rail=${railInfo.rail}`));
+    }
+    const rail = railInfo?.rail ?? healthRail ?? 'unknown';
+    const expectedRail = options.expectedRail;
+    step('health', `server: ${apiUrl} rail=${rail}`, {
+      apiUrl,
+      rail,
+      ...(expectedRail !== undefined ? { expectedRail } : {}),
+    });
+    if (expectedRail !== undefined && rail !== expectedRail) {
+      return fail(
+        new Error(`rail_mismatch: server ${apiUrl} runs rail=${rail} but --rail ${expectedRail} was expected; restart the API with RAIL=${expectedRail} or drop --rail`),
+      );
+    }
+  }
+
   // 1. Task → quote.
   if (options.scenario !== undefined && !isScenarioName(options.scenario)) {
     return fail(new Error(`unknown_scenario: ${String(options.scenario)}`));
@@ -249,7 +288,7 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
   let currency = quote.currency;
   let amount = quote.amount;
   try {
-    const railInfo = await getRail(options.apiUrl);
+    if (!railInfoFetched) railInfo = await getRail(options.apiUrl); // health check skipped: fetch once now
     if (railInfo) {
       const mappedPayee = railInfo.payees[quote.payee] ?? quote.payee;
       payee = mappedPayee;
