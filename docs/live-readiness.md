@@ -57,18 +57,19 @@ Owner checklist:
       Docs: [Set up accounts and environment for payouts](https://developer.paypal.com/payouts/use-payouts/set-up).
 - [ ] **Copy the app's client ID and client secret** into `.env`.
 - [ ] **Confirm Payouts works for the sandbox app** (*needs confirmation*). PayPal's Payouts overview says that
-      using Payouts requires requesting access, and that "in the meantime, you can set up and test your
-      integration in your sandbox accounts". The sandbox setup page lists no separate Payouts toggle for sandbox
+      using Payouts requires requesting access, and that you can test in sandbox accounts while the request is
+      pending. The sandbox setup page lists no separate Payouts toggle for sandbox
       apps. The docs don't say whether a sandbox app's **Features** list must show Payouts as enabled, so check
       the app's Features section in the dashboard. The live access request applies only to going live, which is
       out of scope.
       Docs: [Payouts overview](https://developer.paypal.com/docs/payouts/standard/),
       [Use Payouts API](https://developer.paypal.com/docs/payouts/standard/integrate-api/).
 - [ ] **Check the sandbox business account has a balance.** Payouts are funded from the sender's PayPal balance.
-      The amount a new sandbox business account starts with *needs confirmation*; you can see it under
-      **Sandbox > Accounts**.
+      The amount a new sandbox business account starts with *needs confirmation*; check it on the sandbox
+      accounts page.
 - [ ] **Pick the receiver:** a **personal** sandbox account, and copy its **email address**. Its email is
-      shown under **Sandbox > Accounts > View/Edit Account**. It is used for the PayPal integration test and
+      shown on the sandbox accounts page of the Developer Dashboard (see
+      [Sandbox accounts](https://developer.paypal.com/tools/sandbox/accounts/)). It is used for the PayPal integration test and
       (recommended) for the demo payee map.
 
 Env names to fill:
@@ -168,8 +169,8 @@ decision. Treat it as its own step, after the work above. Before flipping visibi
       visible once the repository is public. Search for anything that looks like a client secret, private key or
       seed phrase, and confirm no `.env` file was ever committed (`git log --all --stat -- .env` should print
       nothing). If anything was ever committed, **rotate or revoke it first**: create a new PayPal sandbox
-      secret, and replace the NEAR key or abandon that testnet account. GitHub's guidance is that rotating comes
-      first and that rewriting history is often unnecessary after that.
+      secret, and replace the NEAR key or abandon that testnet account. GitHub's guidance is to rotate first, then
+      decide whether to rewrite history (for example with `git-filter-repo`).
       Docs: [Removing sensitive data from a repository](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
 - [ ] **Know what GitHub scanning covers.** GitHub secret scanning runs automatically and free on **public**
       repositories and scans the whole Git history on all branches. For user-owned private repositories it is
@@ -178,7 +179,8 @@ decision. Treat it as its own step, after the work above. Before flipping visibi
       users is on by default and blocks pushing detected secrets to **public** repositories.
       Docs: [Secret scanning](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning),
       [Push protection](https://docs.github.com/en/code-security/secret-scanning/introduction/about-push-protection).
-- [ ] **Flip visibility** in **Settings > Danger Zone > Change repository visibility**. Making it public also
+- [ ] **Flip visibility** in the repository's **Settings**, in the
+      **Danger Zone** section. Making it public also
       makes Actions history and logs visible to everyone and lets anyone fork the repository.
       Docs: [Setting repository visibility](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility).
 
