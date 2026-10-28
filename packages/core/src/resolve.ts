@@ -10,7 +10,8 @@ export interface ResolveInput {
   status: ResolveStatus;
   note: string;
   externalId?: string;
-  resolvedBy?: string;
+  /** Operator who resolved the receipt (required, non-empty, max 128 chars; self-reported, no auth). */
+  resolvedBy: string;
 }
 
 export type ResolveResult = PaymentResult & { changed: true; resolution: ReceiptResolution };
@@ -23,6 +24,12 @@ function assertValidResolveInput(input: ResolveInput): void {
   }
   if (typeof input.note !== 'string' || input.note.trim() === '') {
     throw new TypeError('invalid_resolve: note must be a non-empty string');
+  }
+  if (typeof input.resolvedBy !== 'string' || input.resolvedBy.trim() === '') {
+    throw new TypeError('invalid_resolve: resolvedBy must be a non-empty string');
+  }
+  if (input.resolvedBy.length > 128) {
+    throw new TypeError('invalid_resolve: resolvedBy must be at most 128 characters');
   }
 }
 
@@ -59,7 +66,7 @@ export async function resolveIntent(
   const base = { intentId, decision };
   const stored = entry.receipt;
   const at = now().toISOString();
-  const resolvedBy = input.resolvedBy ?? 'operator';
+  const resolvedBy = input.resolvedBy;
   const status = input.status;
 
   const newReceipt: Receipt = {
