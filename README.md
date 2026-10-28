@@ -68,6 +68,8 @@ flowchart LR
 The `near` rail slot exists in the API's adapter registry but has no adapter yet: `RAIL=near` exits at startup
 with `adapter_not_wired`.
 
+Project description and demo video script: [docs/submission/](docs/submission/).
+
 ## Quick start
 
 Requires **Node 24** (TypeScript runs directly through Node's type stripping; no build step).
