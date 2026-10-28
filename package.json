@@ -13,6 +13,7 @@
   "scripts": {
     "demo": "node scripts/demo.mjs",
     "demo:record": "node scripts/record-demo.mjs",
+    "demo:submission": "node scripts/record-submission.mjs",
     "test": "npm test --workspaces --if-present && pnpm -C apps/web test",
     "typecheck": "npm run typecheck --workspaces --if-present && pnpm -C apps/web typecheck",
     "web:install": "pnpm -C apps/web install --frozen-lockfile"
