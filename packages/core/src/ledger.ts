@@ -23,7 +23,7 @@ export interface LedgerEntry {
    * filled on read for older files). Optional in the type only so other LedgerEntry
    * producers that predate it (the web app's in-memory ledger) still type-check.
    */
-  decisions?: DecisionRecord[];
+  decisions: DecisionRecord[];
   paymentStatus?: PaymentStatus;
   receipt?: Receipt;
   /** Set only by a manual operator resolve (POST /intents/:id/resolve). */
