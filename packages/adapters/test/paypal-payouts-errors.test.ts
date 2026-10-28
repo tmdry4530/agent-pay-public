@@ -118,6 +118,29 @@ function adapterConfig(fetchMock: typeof fetch, onError?: (e: unknown) => void) 
   };
 }
 
+function payoutBatchWithItemCount(
+  source: typeof SHOW_PAYOUT_BATCH_200,
+  count: number,
+): typeof SHOW_PAYOUT_BATCH_200 {
+  const body = structuredClone(source);
+  const first = body.items[0];
+  assert.ok(first);
+  body.items = Array.from({ length: count }, (_, i) =>
+    i === 0 ? first : structuredClone(first),
+  );
+  return body;
+}
+
+function createPayout201WithItemCount(count: number) {
+  const body = structuredClone(CREATE_PAYOUT_201) as typeof CREATE_PAYOUT_201 & {
+    items?: (typeof SHOW_PAYOUT_BATCH_200.items)[number][];
+  };
+  const template = structuredClone(SHOW_PAYOUT_BATCH_200).items[0];
+  assert.ok(template);
+  body.items = Array.from({ length: count }, () => structuredClone(template));
+  return body;
+}
+
 const BATCH_STATUS_EXPECTED: Record<(typeof BATCH_STATUS_VALUES)[number], ReceiptStatus> = {
   SUCCESS: 'succeeded',
   PENDING: 'pending',
@@ -172,7 +195,7 @@ describe('mapPayoutStatus — batch DENIED with item PENDING (decision 3)', () =
   });
 
   it('status(): DENIED batch with one PENDING item -> pending receipt', async () => {
-    const body = structuredClone(SHOW_PAYOUT_BATCH_200);
+    const body = payoutBatchWithItemCount(SHOW_PAYOUT_BATCH_200, 1);
     body.batch_header.batch_status = 'DENIED';
     const firstItem = body.items[0];
     assert.ok(firstItem);
@@ -362,6 +385,31 @@ describe('pay() — payout error fixtures', () => {
     assert.ok(errors.length > 0);
   });
 
+  it('CREATE_PAYOUT_201 with 3 items -> pending, receipt_mismatch meta, onError', async () => {
+    const errors: unknown[] = [];
+    const body = createPayout201WithItemCount(3);
+    const { fetchMock } = createFetchMock([
+      tokenRoute(),
+      {
+        method: 'POST',
+        path: '/v1/payments/payouts',
+        handler: () => jsonResponse(body, 201),
+      },
+    ]);
+    const adapter = createPayPalAdapter(adapterConfig(fetchMock, (e) => errors.push(e)));
+    const receipt = await adapter.pay(baseIntent({ id: 'multi-item-201' }));
+    assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.externalId, '3TRXJ4Z8XJ8QY');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+    assert.equal(receiptMeta(receipt)?.errorName, 'receipt_mismatch');
+    assert.equal(receiptMeta(receipt)?.itemCount, '3');
+    assert.equal(receiptMeta(receipt)?.batchStatus, 'PENDING');
+    assert.ok(errors.length > 0);
+    const err = errors[0];
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /^receipt_mismatch: /);
+  });
+
   it('duplicate error with batch link -> receipt from GET, duplicateSenderBatchId, no needsManualResolve', async () => {
     const { fetchMock, calls } = createFetchMock([
       tokenRoute(),
@@ -381,7 +429,7 @@ describe('pay() — payout error fixtures', () => {
       {
         method: 'GET',
         path: '/v1/payments/payouts/LINKED-BATCH',
-        handler: () => jsonResponse(SHOW_PAYOUT_BATCH_200),
+        handler: () => jsonResponse(payoutBatchWithItemCount(SHOW_PAYOUT_BATCH_200, 1)),
       },
     ]);
     const adapter = createPayPalAdapter(adapterConfig(fetchMock));
@@ -410,7 +458,7 @@ describe('status() — payout batch fixtures', () => {
       {
         method: 'GET',
         path: '/v1/payments/payouts/MJ77GF8MQ2TF6',
-        handler: () => jsonResponse(SHOW_PAYOUT_BATCH_200),
+        handler: () => jsonResponse(payoutBatchWithItemCount(SHOW_PAYOUT_BATCH_200, 1)),
       },
     ]);
     const adapter = createPayPalAdapter(adapterConfig(fetchMock));
@@ -426,7 +474,7 @@ describe('status() — payout batch fixtures', () => {
 
   for (const itemStatus of TRANSACTION_STATUS_VALUES) {
     it(`SHOW_PAYOUT_BATCH_200 clone items[0].transaction_status ${itemStatus}`, async () => {
-      const body = structuredClone(SHOW_PAYOUT_BATCH_200);
+      const body = payoutBatchWithItemCount(SHOW_PAYOUT_BATCH_200, 1);
       const first = body.items[0];
       assert.ok(first);
       first.transaction_status = itemStatus;
@@ -460,6 +508,31 @@ describe('status() — payout batch fixtures', () => {
       const adapter = createPayPalAdapter(adapterConfig(fetchMock));
       const out = await adapter.status(pendingReceipt);
       assert.equal(out.status, mapPayoutStatus(batchStatus));
+    });
+  }
+
+  for (const itemCount of [2, 3] as const) {
+    it(`status() batch with ${itemCount} items -> receipt_mismatch, onError`, async () => {
+      const errors: unknown[] = [];
+      const body = payoutBatchWithItemCount(SHOW_PAYOUT_BATCH_200, itemCount);
+      const { fetchMock } = createFetchMock([
+        tokenRoute(),
+        {
+          method: 'GET',
+          path: '/v1/payments/payouts/MJ77GF8MQ2TF6',
+          handler: () => jsonResponse(body),
+        },
+      ]);
+      const adapter = createPayPalAdapter(adapterConfig(fetchMock, (e) => errors.push(e)));
+      await assert.rejects(adapter.status(pendingReceipt), (e: unknown) => {
+        assert.ok(e instanceof Error);
+        assert.match(e.message, /^receipt_mismatch: /);
+        return true;
+      });
+      assert.equal(errors.length, 1);
+      const err = errors[0];
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /^receipt_mismatch: /);
     });
   }
 
