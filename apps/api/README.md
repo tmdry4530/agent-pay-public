@@ -58,6 +58,9 @@ required. `id` (1–128 chars of `[A-Za-z0-9._:-]`) and `createdAt` (ISO 8601 wi
 fills in `pi_<uuid>` and the current time. Unknown fields are rejected. For an idempotent retry, send the same `id`
 **and** `createdAt`: the core replay needs a deep-equal intent, otherwise the retry is a `409 intent_conflict`.
 
+**`GET /ledger` entries** are core `LedgerEntry` objects as stored, including `decisions`: every decision, oldest
+first, as `{status, reason, at, actor?}` (`actor` is `policy` or the approver). `decision` is still the latest one.
+
 **Today's totals** use the same rule as core: UTC day of `intent.createdAt`, entries that count toward the daily
 total (approved and not failed).
 

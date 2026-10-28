@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "intent": {
+        "id": "old-paid",
+        "agentId": "agent-1",
+        "payee": "openai-api",
+        "amount": 60,
+        "currency": "USD",
+        "purpose": "inference credits",
+        "createdAt": "2026-10-27T10:00:00.000Z"
+      },
+      "decision": { "status": "approved", "reason": "approved_by_human: approved by \"alice\"; 60 USD to \"openai-api\" is within hard limits" },
+      "paymentStatus": "paid",
+      "receipt": { "intentId": "old-paid", "rail": "mock", "externalId": "mock-old-paid", "status": "succeeded", "at": "2026-10-27T10:05:00.000Z" },
+      "recordedAt": "2026-10-27T10:00:00.000Z",
+      "updatedAt": "2026-10-27T10:05:00.000Z"
+    },
+    {
+      "intent": {
+        "id": "old-pending",
+        "agentId": "agent-1",
+        "payee": "openai-api",
+        "amount": 70,
+        "currency": "USD",
+        "purpose": "inference credits",
+        "createdAt": "2026-10-27T11:00:00.000Z"
+      },
+      "decision": { "status": "needs_approval", "reason": "approval_required: 70 USD is above the approval threshold 50 USD" },
+      "recordedAt": "2026-10-27T11:00:00.000Z",
+      "updatedAt": "2026-10-27T11:00:00.000Z"
+    },
+    {
+      "intent": {
+        "id": "old-undecided",
+        "agentId": "agent-1",
+        "payee": "openai-api",
+        "amount": 5,
+        "currency": "USD",
+        "purpose": "inference credits",
+        "createdAt": "2026-10-27T12:00:00.000Z"
+      },
+      "recordedAt": "2026-10-27T12:00:00.000Z",
+      "updatedAt": "2026-10-27T12:00:00.000Z"
+    }
+  ]
+}
