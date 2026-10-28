@@ -2,7 +2,8 @@
 
 Demo task-agent CLI. It takes a task ("buy 1M tokens of GPT inference") or a built-in scenario, asks a
 **Planner** for a quote, submits it with `POST /intents`, and when the policy says `needs_approval` it waits
-for a human by polling `GET /ledger`. No runtime deps beyond `@agent-pay/core` types and Node built-ins
+for a human by polling `GET /ledger`. Every run starts with `GET /health`: it prints the server's rail and exits 1
+at once if the API is unreachable (connection refused, 5 s timeout) or `/health` is not 2xx. No runtime deps beyond `@agent-pay/core` types and Node built-ins
 (global `fetch`, `node:util` `parseArgs`). No API keys, no LLM calls.
 
 ## Run
@@ -26,6 +27,7 @@ Use `npm run -s ...` to hide npm's own banner and its error footer on non-zero e
 | `<task...>` / `--task <text>` | | Free-text task for the planner |
 | `--scenario <name>` | | `small`, `over-limit`, or `needs-approval` (mutually exclusive with a task) |
 | `--api <url>` | `http://127.0.0.1:8787` | API base URL |
+| `--rail <name>` | | Expected server rail (`mock`, `paypal`, `near`, …). If `GET /health` reports another rail, exit 1 (`rail_mismatch`) before any intent is sent |
 | `--agent-id <id>` | `demo-agent` | `agentId` on the intent |
 | `--timeout-ms <n>` | `120000` | How long to wait for a human decision, and (separately) for a pending receipt to settle |
 | `--poll-ms <n>` | `1000` | `GET /ledger` poll interval while waiting for approval; `POST /intents/:id/refresh` interval while a receipt is pending |
@@ -66,13 +68,15 @@ day is rejected with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
 | 0 | `paid` | Payment went through |
 | 2 | `rejected` | Rejected by policy or by a human |
 | 3 | `approval_timeout` / `receipt_pending` | Still `needs_approval` after `--timeout-ms`, or receipt still `pending` after the receipt wait |
-| 1 | `failed` / `error` | Payment failed on the rail, or the agent could not finish: bad arguments, planner error, API down, HTTP error |
+| 1 | `failed` / `error` | Payment failed on the rail, or the agent could not finish: bad arguments, planner error, API down (`api_unreachable`, `health_check_failed`), `--rail` mismatch (`rail_mismatch`), HTTP error |
 
 ## Human output
 
-One `[step] message` line per step, then `Done: <status> (exit N)` plus `Reason:`, `Receipt:` or `Error:` lines.
+First a `server: <api url> rail=<rail>` line from `GET /health`, then one `[step] message` line per step, then
+`Done: <status> (exit N)` plus `Reason:`, `Receipt:` or `Error:` lines.
 
 ```
+server: http://127.0.0.1:8787 rail=mock
 [task] scenario "needs-approval": buy 7.5M tokens of GPT inference
 [quote] rule-based quoted 75 USD to openai-api (buy 7.5M tokens of GPT inference (7.5 x 1M tokens @ 10 USD))
 [submit_intent] POST http://127.0.0.1:8787/intents as demo-agent
@@ -86,7 +90,9 @@ Done: paid (exit 0)
 ## `--json` format: NDJSON
 
 stdout carries one JSON object per line: a `step` event per step, then exactly one `summary` line, always last.
-Argument errors caught before the run starts go to stderr only (exit 1, no NDJSON).
+Argument errors caught before the run starts go to stderr only (exit 1, no NDJSON). The first line is the `health`
+step; if the API is down the output is just an `error` step and an `error` summary; a `--rail` mismatch gives
+`health`, `error`, `summary`.
 
 ```jsonc
 // step event
@@ -100,6 +106,7 @@ Argument errors caught before the run starts go to stderr only (exit 1, no NDJSO
 
 | `step` | Extra fields |
 |---|---|
+| `health` | `apiUrl`, `rail` (`unknown` if `/health` has none), `expectedRail` (with `--rail`); always the first line when the API is up |
 | `task` | `task`, `scenario` |
 | `quote` | `planner`, `quote` |
 | `submit_intent` | `agentId` |
@@ -144,8 +151,10 @@ const result = await runAgent(
 // result: { status, exitCode, task, scenario?, quote?, intentId?, receipt?, reason?, error? }; never throws
 ```
 
+`runAgent` options also take `expectedRail` (the CLI's `--rail`) and `healthCheck: false` to skip `GET /health`.
+
 ## Tests
 
 `npm test -w @agent-pay/agent` starts `apps/api` with `createServer` on port 0, a temp `LEDGER_PATH`, and the
 mock rail, then drives the agent in-process and as a child process (scenarios, external approve/reject,
-approval timeout, API down, `--json` shape, exit codes) plus `RuleBasedPlanner` unit tests.
+approval timeout, API down / non-2xx `/health`, `--rail` mismatch, `--json` shape, exit codes) plus `RuleBasedPlanner` unit tests.

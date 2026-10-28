@@ -10,7 +10,13 @@
 | `HOST` | `127.0.0.1` | bind address |
 | `LEDGER_PATH` | `apps/api/.data/ledger.json` (resolved from the api package, gitignored) | single writer process per file |
 | `RAIL` | `mock` | `mock` \| `paypal` \| `near`. `near` is not wired yet and exits at startup with `adapter_not_wired: near adapter not wired yet` |
-| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit). Missing → exits at startup with `adapter_config: …` |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit). Missing → exits 1 at startup with `adapter_config: …` plus `missing required env vars for RAIL=paypal: <names>` (names only, no values, no stack trace) |
+
+All names are listed in the root [.env.example](../../.env.example); `node --env-file=.env apps/api/src/main.ts`
+loads a filled-in copy. Startup errors are formatted by `src/startup-error.ts`: an error carrying a `missing` /
+`missingEnv` / `names` string array (e.g. a future adapter `AdapterConfigError`) is listed as-is; otherwise the
+rail's known required names (`REQUIRED_ENV`) or env names quoted in a "… is required" message are checked
+against the environment. Credential-like env values are scrubbed from the printed message.
 
 ## Policy
 Kept **in memory** (one policy, one agent), seeded with `DEFAULT_POLICY`:
