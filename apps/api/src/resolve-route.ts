@@ -24,10 +24,6 @@ function str(obj: Obj, key: string, max: number): string {
   return v;
 }
 
-function optStr(obj: Obj, key: string, max: number): string | undefined {
-  return obj[key] === undefined ? undefined : str(obj, key, max);
-}
-
 function optAnyStr(obj: Obj, key: string, max: number): string | undefined {
   if (obj[key] === undefined) return undefined;
   const v = obj[key];
@@ -56,12 +52,13 @@ export function parseResolveBody(body: unknown): ResolveInput {
   const status = parseStatus(o);
   const note = str(o, 'note', 1000);
   const externalId = optAnyStr(o, 'externalId', 256);
-  const resolvedBy = optStr(o, 'resolvedBy', 128);
+  if (o.resolvedBy === undefined) throw bad('"resolvedBy" is required');
+  const resolvedBy = str(o, 'resolvedBy', 128);
   return {
     status,
     note,
     ...(externalId === undefined ? {} : { externalId }),
-    ...(resolvedBy === undefined ? {} : { resolvedBy }),
+    resolvedBy,
   };
 }
 

@@ -48,7 +48,7 @@ All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
 | `POST /intents/:id/approve` | optional `{approver?}` | `200 PaymentResult` (`paid`, or `rejected` if the re-check fails) |
 | `POST /intents/:id/reject` | optional `{approver?, note?}` | `200 PaymentResult` (`rejected`, reason `rejected_by_human: …`) |
 | `POST /intents/:id/refresh` | optional empty body | `200 PaymentResult & {changed: boolean}` — polls the adapter's `status()` for a **pending** receipt on this rail; settles the ledger when the rail reports `succeeded` or `failed`. Still `pending` → `changed: false`, no ledger write. |
-| `POST /intents/:id/resolve` | `{status: succeeded\|failed\|refunded, note, externalId?, resolvedBy?}` | `200 PaymentResult & {changed: true, resolution}` — operator settles a **pending** receipt by hand; never calls the adapter (see below) |
+| `POST /intents/:id/resolve` | `{status: succeeded\|failed\|refunded, note, resolvedBy, externalId?}` | `200 PaymentResult & {changed: true, resolution}` — operator settles a **pending** receipt by hand; never calls the adapter (see below) |
 | `GET /ledger` | | `200 {entries: LedgerEntry[], today: {day: "YYYY-MM-DD" (UTC), totals: {[agentId]: number}}}` |
 | `GET /policy` | | `200 Policy` |
 | `PUT /policy` | full `Policy` | `200 Policy` |
@@ -68,7 +68,8 @@ receipts with `meta.needsManualResolve: "true"` (duplicate `sender_batch_id` gue
 batches with 2+ items). The route never calls the adapter (`pay()` or `status()`); it only writes the ledger.
 - Body: `status` required, one of `succeeded` / `failed` / `refunded` (`pending` is rejected); `note` required, non-empty
   (≤1000 chars); `externalId` optional (≤256 chars, replaces the stored rail id, e.g. the real PayPal batch id; omitted =
-  keep it); `resolvedBy` optional operator name (≤128 chars, default `"operator"`). Unknown fields → 400.
+  keep it); `resolvedBy` required operator name, non-empty after trimming (≤128 chars, no default; missing, empty or
+  whitespace-only → `400 invalid_body`). Unknown fields → 400.
 - Ledger: the receipt gets the new `status` / `externalId` / `at` (other receipt fields such as `meta` are kept), and the
   entry gets `resolution: {status, resolvedBy, note, at, previousExternalId}`.
 - Daily total: `failed` also marks the payment failed, so the amount is freed; `succeeded` and `refunded` keep counting
