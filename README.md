@@ -73,6 +73,7 @@ lives in `packages/adapters` only; it is not a server rail, so `RAIL=paypal-orde
 uses it to map its quotes (details in [apps/api/README.md](apps/api/README.md#per-rail-demo-seed)).
 
 Project description and demo video script: [docs/submission/](docs/submission/).
+Moving from mock to PayPal sandbox and NEAR testnet: [docs/live-readiness.md](docs/live-readiness.md).
 
 ## Quick start
 
