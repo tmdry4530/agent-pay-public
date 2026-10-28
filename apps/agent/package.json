@@ -1,0 +1,21 @@
+{
+  "name": "@agent-pay/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agent-pay/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@agent-pay/api": "0.1.0"
+  },
+  "scripts": {
+    "start": "node src/cli.ts",
+    "agent": "node src/cli.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc -p ."
+  }
+}
