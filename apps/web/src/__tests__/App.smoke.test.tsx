@@ -41,6 +41,30 @@ describe('App smoke', () => {
     );
   });
 
+  it('ledger lists policy approval required and human approved for $75 approve flow', async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(screen.getByTestId('scenario-needs-approval'));
+    await user.click(screen.getByTestId('btn-quote'));
+    await user.click(screen.getByTestId('btn-policy'));
+    await user.click(screen.getByTestId('btn-approve'));
+    await screen.findByTestId('receipt');
+
+    const ledger = screen.getByTestId('ledger');
+    const events = within(ledger).getAllByTestId('ledger-event');
+    const text = events.map((el) => el.textContent ?? '').join('\n');
+
+    expect(text).toMatch(/approval required/i);
+    expect(within(ledger).getAllByText(/approval required/i).length).toBeGreaterThan(0);
+    expect(within(ledger).getByText(/human approved/i)).toBeInTheDocument();
+
+    const actors = within(ledger).getAllByTestId('ledger-actor');
+    const actorText = actors.map((el) => el.textContent ?? '').join(' ');
+    expect(actorText).toMatch(/by policy/i);
+    expect(actorText).toMatch(/by demo-operator/i);
+  });
+
   it('pending settlement: PENDING badge, refresh settles receipt', async () => {
     const user = userEvent.setup();
     render(

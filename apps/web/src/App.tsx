@@ -592,10 +592,25 @@ export default function App() {
             ) : (
               <ul className="ledger-list">
                 {timeline.map((ev) => (
-                  <li key={ev.id}>
+                  <li
+                    key={ev.id}
+                    data-testid="ledger-event"
+                    data-kind={ev.kind ?? 'intent'}
+                  >
                     <span className="ledger-type">{ev.label}</span>
                     <span className="ledger-time">{formatTime(ev.at)}</span>
                     {ev.detail && <span className="ledger-detail">{ev.detail}</span>}
+                    {ev.actor && (
+                      <span className="ledger-actor" data-testid="ledger-actor">
+                        by {ev.actor}
+                      </span>
+                    )}
+                    {ev.kind === 'resolution' && ev.previousExternalId !== undefined && (
+                      <span className="ledger-resolution" data-testid="ledger-resolution">
+                        {ev.actor} · {ev.detail} · {formatTime(ev.at)} · previous:{' '}
+                        {ev.previousExternalId}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
