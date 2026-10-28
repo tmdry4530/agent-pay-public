@@ -160,6 +160,39 @@ describe('mapPayoutStatus — item fixtures', () => {
   }
 });
 
+describe('mapPayoutStatus — batch DENIED with item PENDING (decision 3)', () => {
+  // Decision 3: this combination stays 'pending'.
+  // - The item status wins over the batch status in mapPayoutStatus.
+  // - The PayPal docs (batch_enum / transaction_enum) do not say whether a
+  //   DENIED batch can ever carry a PENDING item.
+  // - 'pending' is the safe answer against double-pay: 'failed' would free
+  //   the daily limit while the item might still be paid out.
+  it('DENIED batch + PENDING item -> pending', () => {
+    assert.equal(mapPayoutStatus('DENIED', 'PENDING'), 'pending');
+  });
+
+  it('status(): DENIED batch with one PENDING item -> pending receipt', async () => {
+    const body = structuredClone(SHOW_PAYOUT_BATCH_200);
+    body.batch_header.batch_status = 'DENIED';
+    const firstItem = body.items[0];
+    assert.ok(firstItem);
+    firstItem.transaction_status = 'PENDING';
+    const { fetchMock } = createFetchMock([
+      tokenRoute(),
+      { method: 'GET', path: '/v1/payments/payouts/MJ77GF8MQ2TF6', handler: () => jsonResponse(body) },
+    ]);
+    const adapter = createPayPalAdapter(adapterConfig(fetchMock));
+    const out = await adapter.status({
+      intentId: 'intent-denied',
+      rail: 'paypal',
+      externalId: 'MJ77GF8MQ2TF6',
+      status: 'pending',
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    assert.equal(out.status, 'pending');
+  });
+});
+
 describe('pay() — payout error fixtures', () => {
   it('CREATE_PAYOUT_201 at 201 -> pending with batch id and meta.batchStatus PENDING', async () => {
     const { fetchMock } = createFetchMock([
