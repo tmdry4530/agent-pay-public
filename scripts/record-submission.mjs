@@ -642,7 +642,7 @@ function escapeHtml(s) {
 }
 
 function agentCliCommand(apiUrl) {
-  let cmd = 'npm run -s agent -w @agent-pay/agent -- --scenario small --json';
+  let cmd = 'npm run -s agent -- --scenario small --json';
   if (apiUrl !== DEFAULT_API) {
     cmd += ` --api ${apiUrl}`;
   }
@@ -654,8 +654,6 @@ function runAgentCli(apiUrl) {
     'run',
     '-s',
     'agent',
-    '-w',
-    '@agent-pay/agent',
     '--',
     '--scenario',
     'small',
