@@ -17,7 +17,8 @@
     "test": "npm test --workspaces --if-present && cd apps/web && pnpm test",
     "typecheck": "npm run typecheck --workspaces --if-present && cd apps/web && pnpm typecheck",
     "web:install": "cd apps/web && pnpm install --frozen-lockfile",
-    "agent": "npm run -s agent -w @agent-pay/agent --"
+    "agent": "npm run -s agent -w @agent-pay/agent --",
+    "api": "node --env-file-if-exists=.env apps/api/src/main.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
