@@ -7,9 +7,9 @@ agent submits a payment intent to a local HTTP API; a pure policy engine checks 
 a daily max, a payee allowlist, the policy currency and an approval threshold, and the result is `approved`,
 `rejected` or `needs_approval`. Every intent, decision, payment and receipt is written in a fixed order to a JSON
 ledger, retries of the same intent never pay twice, and payments above the threshold wait until a human approves
-them over HTTP (limits are re-checked at approval time). Only approved intents reach a rail adapter. The demo runs
-on a mock rail with no real funds; the same API can instead run on PayPal sandbox Payouts (`RAIL=paypal`) or NEAR
-testnet native transfers (`RAIL=near`).
+them over HTTP (limits are re-checked at approval time). Only approved intents reach a rail adapter. The demo was
+recorded on a mock rail with no real funds; the same flow is wired to PayPal Payouts sandbox (`RAIL=paypal`) and
+NEAR testnet (`RAIL=near`) adapters.
 
 ## Full description
 
@@ -32,7 +32,7 @@ and allows four payees. A task-agent CLI turns a task such as "buy 1M tokens of 
 it, waits for a human if needed, and exits 0 (paid), 2 (rejected), 3 (timed out) or 1 (failed or error). It first
 calls `GET /health` and prints the server's rail; `--rail` stops it if the API runs another one. The planner is
 rail-agnostic: `GET /rail` maps its logical payees and USD amounts to rail addresses and currency (on NEAR, 10 USD
-becomes 0.1 NEAR). A React web demo walks the same pipeline step by step.
+becomes 0.1 NEAR). A React web demo walks the same pipeline; its Mock/PayPal/NEAR toggle shows the API's rail.
 
 ### Safety
 
@@ -48,10 +48,10 @@ becomes 0.1 NEAR). A React web demo walks the same pipeline step by step.
 ### Tech stack
 
 TypeScript run directly by Node 24. Core, API and agent CLI have no third-party runtime
-dependencies. The web demo uses React and Vite. The `paypal` rail sends a PayPal Payouts v1 sandbox payout to an
-email payee and can refresh its status; it has no refund. The `near` rail signs one native NEAR transfer on testnet
-through a zero-dependency JSON-RPC client; signed transfers are final, so there is no refund. A PayPal Orders v2
-module (`paypal-orders`) stays adapter-side only.
+dependencies. The web demo uses React and Vite. The `paypal` adapter targets PayPal Payouts v1 sandbox
+(email payee, status refresh, no refund). The `near` adapter signs one native NEAR testnet transfer through a
+zero-dependency JSON-RPC client; transfers are final (no refund). Neither has been run against the live services
+yet. A PayPal Orders v2 module (`paypal-orders`) stays adapter-side only.
 
 ### Next steps
 
