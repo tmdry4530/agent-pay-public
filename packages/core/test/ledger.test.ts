@@ -93,6 +93,29 @@ test('round-trip intent -> decision -> payment -> receipt survives a new instanc
   assert.equal(await b.get('nope'), undefined);
 });
 
+test('receipt meta round-trips and is not shared by reference', async (t) => {
+  const dir = await tempDir(t);
+  const filePath = join(dir, 'ledger.json');
+  const now = fixedClock('2026-10-28T10:00:00.500Z');
+  const a = new Ledger({ filePath, now });
+  const i = intent();
+  const meta = { payoutItemId: 'ITEM-1' };
+  const r = receipt(i.id, { meta });
+  await a.recordIntent(i);
+  await a.recordDecision(i.id, { status: 'approved', reason: 'within_policy: ok' });
+  await a.recordPayment(i.id, 'paid');
+  await a.recordReceipt(i.id, r);
+
+  meta.payoutItemId = 'MUTATED';
+
+  const b = new Ledger({ filePath, now });
+  const entry = await b.get(i.id);
+  assert.deepEqual(entry!.receipt!.meta, { payoutItemId: 'ITEM-1' });
+  assert.deepEqual(JSON.parse(await readFile(filePath, 'utf8')).entries[0].receipt.meta, {
+    payoutItemId: 'ITEM-1',
+  });
+});
+
 test('enforces lifecycle order', async (t) => {
   const dir = await tempDir(t);
   const ledger = new Ledger({ filePath: join(dir, 'ledger.json') });

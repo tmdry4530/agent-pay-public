@@ -13,7 +13,7 @@ npm run typecheck      # tsc --noEmit
 - `PaymentIntent {id, agentId, payee, amount, currency, purpose, createdAt}`: `amount` is in major units; `createdAt` is ISO 8601.
 - `Policy {agentId, perTxMax, dailyMax, allowedPayees, requireApprovalAbove, currency?}`
 - `Decision {status: 'approved'|'rejected'|'needs_approval', reason}`: `reason` = `"<code>: <detail>"`; `reasonCode(decision)` extracts the code.
-- `Receipt {intentId, rail: 'mock'|'paypal'|'near', externalId, status: 'succeeded'|'pending'|'failed'|'refunded', at}`
+- `Receipt {intentId, rail: 'mock'|'paypal'|'near', externalId, status: 'succeeded'|'pending'|'failed'|'refunded', at, meta?}`: optional `meta` holds rail-specific string ids/details (not secrets).
 - `LedgerState {dailyTotal}`: what `evaluate` needs from the ledger.
 
 ## `evaluate(policy, intent, ledgerState): Decision`
@@ -41,8 +41,10 @@ interface PaymentAdapter {
   readonly rail: 'mock' | 'paypal' | 'near';
   pay(intent: PaymentIntent): Promise<Receipt>;
   refund?(receipt: Receipt): Promise<Receipt>;
+  status?(receipt: Receipt): Promise<Receipt>;
 }
 ```
+- Optional `status(receipt)` re-checks a pending receipt with the rail and returns an updated receipt (same `intentId`/`rail`); definite rail answers do not throw; unknown/network keeps `pending`.
 - Call `pay` only for an `approved` decision. Return a `Receipt` with `intentId === intent.id` and `rail === adapter.rail`.
 - If the rail declines the payment, resolve with `status: 'failed'`. Throw only for unexpected errors.
 - `refund` resolves with a new receipt (`status: 'refunded'`).
