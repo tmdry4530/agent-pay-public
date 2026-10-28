@@ -90,7 +90,7 @@ test('pending receipt settles to paid with await_receipt and refresh steps', asy
   assert.equal(result.exitCode, 0);
   assert.equal(result.receipt?.status, 'succeeded');
   const steps = events.flatMap((e) => (e.type === 'step' ? [e.step] : []));
-  assert.deepEqual(steps, ['task', 'quote', 'submit_intent', 'intent_result', 'await_receipt', 'refresh']);
+  assert.deepEqual(steps, ['health', 'task', 'quote', 'submit_intent', 'intent_result', 'await_receipt', 'refresh']);
   // First refresh is still pending (no event); only the change emits `refresh`.
   const refresh = events.find((e) => e.type === 'step' && e.step === 'refresh');
   assert.equal(refresh?.type === 'step' && refresh.from, 'pending');

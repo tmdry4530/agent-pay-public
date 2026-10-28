@@ -88,6 +88,9 @@ LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm start -w @agent-pay/api
 # agent-pay api listening on http://127.0.0.1:8787 (rail=mock, ledger=/tmp/agent-pay-demo/ledger.json)
 ```
 
+To keep settings in a file instead, `cp .env.example .env` (gitignored; key names only, empty = default), fill it
+in, and run `node --env-file=.env apps/api/src/main.ts`.
+
 Run the three scenarios (terminal 2):
 
 ```sh
@@ -96,6 +99,8 @@ npm run agent -w @agent-pay/agent -- --scenario over-limit
 npm run agent -w @agent-pay/agent -- --scenario needs-approval --auto-approve-as alice
 ```
 
+The agent first calls `GET /health` and prints `server: http://127.0.0.1:8787 rail=mock`; if the API is not
+reachable it exits 1 immediately. `--rail <name>` makes it exit 1 when the server runs a different rail.
 Add `--json` for NDJSON output, or use `npm run -s agent ...` to hide npm's banner and its error footer on a
 non-zero exit.
 
@@ -198,6 +203,10 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
   | `LEDGER_PATH` | `apps/api/.data/ledger.json` | Ledger file; one writer process per file |
   | `RAIL` | `mock` | `mock` or `paypal` (`near` is not wired yet) |
   | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL` | | Only for `RAIL=paypal` (sandbox) |
+
+  All names are in [.env.example](.env.example). With `RAIL=paypal` and a required var unset, the API exits 1 and
+  lists the missing names (never values), e.g.
+  `missing required env vars for RAIL=paypal: PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET`.
 
   The API answers CORS only for `localhost` / `127.0.0.1` origins. The policy is kept in memory and resets to the
   seed policy when the API restarts (`PUT /policy` changes it until then).

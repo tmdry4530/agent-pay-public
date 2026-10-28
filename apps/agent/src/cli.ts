@@ -10,6 +10,8 @@ Usage:
 
 Options:
   --api <url>              API base URL (default: http://127.0.0.1:8787)
+  --rail <name>            Expected server rail (mock | paypal | near ...). The CLI always calls GET /health
+                           first and prints "server: <url> rail=<rail>"; with --rail it exits 1 if they differ
   --agent-id <id>          Agent id (default: demo-agent)
   --task <text>            Task description for the planner
   --scenario <name>        Built-in demo task: small | over-limit | needs-approval
@@ -21,13 +23,17 @@ Options:
   --json                   NDJSON on stdout: one {"type":"step"} per step, last line {"type":"summary"}
   --help                   Show this help
 
-Exit codes: 0 paid, 2 rejected, 3 approval timeout / receipt still pending, 1 error/failed
+The run starts with GET /health (5 s timeout): an unreachable API or non-2xx /health exits 1 at once.
+
+Exit codes: 0 paid, 2 rejected, 3 approval timeout / receipt still pending,
+            1 error/failed (API down, rail mismatch, bad args, payment failed)
 `;
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
     options: {
       api: { type: 'string', default: 'http://127.0.0.1:8787' },
+      rail: { type: 'string' },
       'agent-id': { type: 'string', default: 'demo-agent' },
       task: { type: 'string' },
       scenario: { type: 'string' },
@@ -90,6 +96,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  const expectedRail = values.rail?.trim();
+  if (values.rail !== undefined && !expectedRail) {
+    console.error('invalid --rail: expected a rail name such as mock, paypal or near');
+    process.exitCode = 1;
+    return;
+  }
+
   const result = await runAgent({
     apiUrl: values.api!,
     agentId: values['agent-id']!,
@@ -100,6 +113,7 @@ async function main(): Promise<void> {
     pollMs,
     autoApproveAs: values['auto-approve-as'],
     approveDelayMs,
+    expectedRail,
   });
 
   process.exitCode = result.exitCode;

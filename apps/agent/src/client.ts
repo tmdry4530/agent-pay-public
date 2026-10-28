@@ -111,3 +111,33 @@ export async function getLedger(apiUrl: string): Promise<LedgerResponse> {
   }
   return (await assertOk(res)) as LedgerResponse;
 }
+
+export interface HealthResponse {
+  ok?: boolean;
+  /** Rail the server was started with (RAIL). Absent on servers that predate it. */
+  rail?: string;
+}
+
+/** Short timeout for the startup health check so a down or hung API fails fast. */
+export const HEALTH_TIMEOUT_MS = 5_000;
+
+/** GET /health. Throws ApiClientError `api_unreachable` (network/timeout) or `health_check_failed` (non-2xx). */
+export async function getHealth(apiUrl: string, timeoutMs: number = HEALTH_TIMEOUT_MS): Promise<HealthResponse> {
+  const url = `${trimBase(apiUrl)}/health`;
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const cause = err instanceof Error && err.cause instanceof Error ? `: ${err.cause.message}` : '';
+    const detail = err instanceof Error ? `${err.message}${cause}` : String(err);
+    throw new ApiClientError(`api_unreachable: GET ${url} failed (${detail}); is the API running?`);
+  }
+  let body: unknown;
+  try {
+    body = await assertOk(res);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new ApiClientError(`health_check_failed: GET ${url} -> HTTP ${res.status} (${detail})`, res.status);
+  }
+  return body !== null && typeof body === 'object' ? (body as HealthResponse) : {};
+}
