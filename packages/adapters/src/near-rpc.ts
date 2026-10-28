@@ -34,14 +34,14 @@ export interface NearRpcClientOptions {
   privateKey: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
-  /** Applied to `send_tx`. Defaults to `EXECUTED_OPTIMISTIC`. */
+  /** Applied to `send_tx`. Defaults to `FINAL`. */
   waitUntil?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_WAIT_UNTIL = 'EXECUTED_OPTIMISTIC';
-/** Status polls always wait until execution; `NONE` does not report SuccessValue/Failure. */
-const STATUS_WAIT_UNTIL = 'EXECUTED_OPTIMISTIC';
+const DEFAULT_WAIT_UNTIL = 'FINAL';
+/** Status polls wait until chain finality; `NONE` does not report SuccessValue/Failure. */
+const STATUS_WAIT_UNTIL = 'FINAL';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const BASE58_MAP: number[] = Array.from({ length: 128 }, () => -1);
@@ -323,10 +323,13 @@ function interpretSend(
     return { kind: 'unknown', txHash, error };
   }
   const execution = readExecutionStatus(body.result);
-  if (execution.kind === 'success') {
-    return { kind: 'final', txHash, success: true };
-  }
-  if (execution.kind === 'failure') {
+  if (execution.kind === 'success' || execution.kind === 'failure') {
+    if (!isFinalExecution(body.result)) {
+      return { kind: 'unknown', txHash, error: scrub(new Error('transaction not final')) };
+    }
+    if (execution.kind === 'success') {
+      return { kind: 'final', txHash, success: true };
+    }
     return { kind: 'final', txHash, success: false, failure: execution.failure };
   }
   return { kind: 'unknown', txHash, error: scrub(new Error('unrecognized transaction status')) };
@@ -357,13 +360,23 @@ function interpretStatus(
     return { kind: 'unknown', error: scrub(body) };
   }
   const execution = readExecutionStatus(body.result);
-  if (execution.kind === 'success') {
-    return { kind: 'final', success: true };
-  }
-  if (execution.kind === 'failure') {
+  if (execution.kind === 'success' || execution.kind === 'failure') {
+    if (!isFinalExecution(body.result)) {
+      return { kind: 'unknown', error: scrub(new Error('transaction not final')) };
+    }
+    if (execution.kind === 'success') {
+      return { kind: 'final', success: true };
+    }
     return { kind: 'final', success: false, failure: execution.failure };
   }
   return { kind: 'unknown', error: scrub(new Error('unrecognized transaction status')) };
+}
+
+// docs.near.org/integrations/create-transactions ("Submission errors and retries")
+// requires final_execution_status === "FINAL" before settlement; a non-final Failure
+// is also left pending because marking it failed frees the daily limit.
+function isFinalExecution(result: unknown): boolean {
+  return isRecord(result) && result.final_execution_status === 'FINAL';
 }
 
 function readExecutionStatus(result: unknown): { kind: 'success' } | { kind: 'failure'; failure: unknown } | { kind: 'missing' } {

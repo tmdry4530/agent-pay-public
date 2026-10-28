@@ -161,7 +161,7 @@ function assertSendTxParams(calls: RpcRequest[]): string {
   const send = calls[1];
   assert.ok(send);
   assert.equal(send.method, 'send_tx');
-  assert.equal(send.params.wait_until, 'EXECUTED_OPTIMISTIC');
+  assert.equal(send.params.wait_until, 'FINAL');
   const signedTxBase64 = send.params.signed_tx_base64;
   assert.equal(typeof signedTxBase64, 'string');
   if (typeof signedTxBase64 !== 'string') {
@@ -240,10 +240,10 @@ describe('near RPC error fixtures — pay()', () => {
     });
   }
 
-  it('resultWithStatus SuccessValue at EXECUTED_OPTIMISTIC -> succeeded', async () => {
+  it('resultWithStatus SuccessValue at FINAL -> succeeded', async () => {
     const errors: unknown[] = [];
     const { adapter, calls } = buildAdapter(
-      () => jsonResponse(resultWithStatus({ SuccessValue: '' }, 'EXECUTED_OPTIMISTIC')),
+      () => jsonResponse(resultWithStatus({ SuccessValue: '' }, 'FINAL')),
       (e) => errors.push(e),
     );
     const receipt = await adapter.pay(baseIntent());
@@ -254,10 +254,10 @@ describe('near RPC error fixtures — pay()', () => {
     assert.equal(errors.length, 0);
   });
 
-  it('resultWithStatus Failure at EXECUTED_OPTIMISTIC -> failed', async () => {
+  it('resultWithStatus Failure at FINAL -> failed', async () => {
     const errors: unknown[] = [];
     const { adapter, calls } = buildAdapter(
-      () => jsonResponse(resultWithStatus({ Failure: {} }, 'EXECUTED_OPTIMISTIC')),
+      () => jsonResponse(resultWithStatus({ Failure: {} }, 'FINAL')),
       (e) => errors.push(e),
     );
     const receipt = await adapter.pay(baseIntent());
@@ -265,6 +265,41 @@ describe('near RPC error fixtures — pay()', () => {
     assertSendTxParams(calls);
     assert.equal(errors.length, 1);
   });
+
+  for (const finality of ['EXECUTED_OPTIMISTIC', 'INCLUDED_FINAL', 'EXECUTED'] as const) {
+    it(`resultWithStatus SuccessValue at ${finality} -> pending with unknownOutcome`, async () => {
+      const errors: unknown[] = [];
+      const { adapter, calls } = buildAdapter(
+        () => jsonResponse(resultWithStatus({ SuccessValue: '' }, finality)),
+        (e) => errors.push(e),
+      );
+      const receipt = await adapter.pay(baseIntent());
+      assert.equal(receipt.status, 'pending');
+      const signed = assertSendTxParams(calls);
+      assert.equal(receipt.externalId, txHashFromSignedTxBase64(signed));
+      assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+      assert.equal(errors.length, 1);
+      assert.ok(errors[0] instanceof Error);
+      assert.equal((errors[0] as Error).message, 'transaction not final');
+    });
+  }
+
+  for (const finality of ['EXECUTED_OPTIMISTIC', 'INCLUDED_FINAL', 'EXECUTED'] as const) {
+    it(`resultWithStatus Failure at ${finality} -> pending with unknownOutcome`, async () => {
+      const errors: unknown[] = [];
+      const { adapter, calls } = buildAdapter(
+        () => jsonResponse(resultWithStatus({ Failure: {} }, finality)),
+        (e) => errors.push(e),
+      );
+      const receipt = await adapter.pay(baseIntent());
+      assert.equal(receipt.status, 'pending');
+      assertSendTxParams(calls);
+      assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+      assert.equal(errors.length, 1);
+      assert.ok(errors[0] instanceof Error);
+      assert.equal((errors[0] as Error).message, 'transaction not final');
+    });
+  }
 
   for (const { label, status, finality } of [
     { label: 'NotStarted at NONE', status: 'NotStarted', finality: 'NONE' },
@@ -308,10 +343,6 @@ describe('near RPC error fixtures — pay()', () => {
     assertSendTxParams(calls);
     assert.equal(errors.length, 1);
   });
-
-  it.todo(
-    'send_tx SuccessValue at EXECUTED_OPTIMISTIC is mapped to succeeded; docs recommend final_execution_status FINAL before settlement',
-  );
 });
 
 describe('near RPC error fixtures — status()', () => {
@@ -364,6 +395,7 @@ describe('near RPC error fixtures — status()', () => {
     assert.equal(tx.method, 'tx');
     assert.equal(tx.params.tx_hash, PLACEHOLDER_HASH);
     assert.equal(tx.params.sender_account_id, accountId);
+    assert.equal(tx.params.wait_until, 'FINAL');
   }
 
   it('HANDLER_UNKNOWN_TRANSACTION -> unchanged receipt, onError not called', async () => {
@@ -432,6 +464,38 @@ describe('near RPC error fixtures — status()', () => {
     assertTxParams(calls);
     assert.equal(errors.length, 0);
   });
+
+  for (const finality of ['EXECUTED_OPTIMISTIC', 'INCLUDED_FINAL', 'EXECUTED'] as const) {
+    it(`resultWithStatus SuccessValue at ${finality} -> unchanged`, async () => {
+      const errors: unknown[] = [];
+      const { adapter, calls } = buildStatusAdapter(
+        () => jsonResponse(resultWithStatus({ SuccessValue: '' }, finality)),
+        (e) => errors.push(e),
+      );
+      const out = await adapter.status(pendingReceipt);
+      assert.deepEqual(out, pendingReceipt);
+      assertTxParams(calls);
+      assert.equal(errors.length, 1);
+      assert.ok(errors[0] instanceof Error);
+      assert.equal((errors[0] as Error).message, 'transaction not final');
+    });
+  }
+
+  for (const finality of ['EXECUTED_OPTIMISTIC', 'INCLUDED_FINAL', 'EXECUTED'] as const) {
+    it(`resultWithStatus Failure at ${finality} -> unchanged`, async () => {
+      const errors: unknown[] = [];
+      const { adapter, calls } = buildStatusAdapter(
+        () => jsonResponse(resultWithStatus({ Failure: {} }, finality)),
+        (e) => errors.push(e),
+      );
+      const out = await adapter.status(pendingReceipt);
+      assert.deepEqual(out, pendingReceipt);
+      assertTxParams(calls);
+      assert.equal(errors.length, 1);
+      assert.ok(errors[0] instanceof Error);
+      assert.equal((errors[0] as Error).message, 'transaction not final');
+    });
+  }
 
   for (const { label, status, finality } of [
     { label: 'NotStarted at NONE', status: 'NotStarted', finality: 'NONE' },
