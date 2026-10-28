@@ -60,7 +60,7 @@ test('resolveIntent: failed drops daily total, preserves meta, records resolutio
   await recordPendingPaid(ledger, i, stored as Receipt);
   assert.equal(await ledger.dailyTotal('agent-1', '2026-10-28'), 10);
 
-  const result = await resolveIntent(i.id, ledger, { status: 'failed', note: 'duplicate batch id' }, () => new Date(NOW));
+  const result = await resolveIntent(i.id, ledger, { status: 'failed', note: 'duplicate batch id', resolvedBy: 'ops' }, () => new Date(NOW));
 
   assert.equal(result.changed, true);
   assert.equal(result.status, 'failed');
@@ -72,7 +72,7 @@ test('resolveIntent: failed drops daily total, preserves meta, records resolutio
   assert.equal(entry?.receipt?.status, 'failed');
   const meta = (entry?.receipt as PendingPayPalReceipt | undefined)?.meta;
   assert.deepEqual(meta, stored.meta);
-  assert.equal(entry?.resolution?.resolvedBy, 'operator');
+  assert.equal(entry?.resolution?.resolvedBy, 'ops');
   assert.equal(entry?.resolution?.note, 'duplicate batch id');
   assert.equal(entry?.resolution?.at, NOW);
   assert.equal(entry?.resolution?.previousExternalId, '');
@@ -87,7 +87,7 @@ test('resolveIntent: succeeded with externalId updates receipt, daily total unch
   const result = await resolveIntent(
     i.id,
     ledger,
-    { status: 'succeeded', note: 'confirmed on PayPal dashboard', externalId: 'BATCH123' },
+    { status: 'succeeded', note: 'confirmed on PayPal dashboard', externalId: 'BATCH123', resolvedBy: 'ops' },
     () => new Date(NOW),
   );
 
@@ -103,7 +103,7 @@ test('resolveIntent: refunded keeps daily total and paymentStatus paid', async (
   await recordPendingPaid(ledger, i, pendingPayPalReceipt(i.id) as Receipt);
   assert.equal(await ledger.dailyTotal('agent-1'), 10);
 
-  const result = await resolveIntent(i.id, ledger, { status: 'refunded', note: 'chargeback settled' }, () => new Date(NOW));
+  const result = await resolveIntent(i.id, ledger, { status: 'refunded', note: 'chargeback settled', resolvedBy: 'ops' }, () => new Date(NOW));
 
   assert.equal(result.status, 'paid');
   assert.equal((await ledger.get(i.id))?.paymentStatus, 'paid');
@@ -111,42 +111,57 @@ test('resolveIntent: refunded keeps daily total and paymentStatus paid', async (
   assert.equal(await ledger.dailyTotal('agent-1'), 10);
 });
 
-test('resolveIntent: resolvedBy default and custom', async (t) => {
-  const { ledger } = await setup(t);
-  const i = intent({ id: 'by-default' });
+test('resolveIntent: resolvedBy is required (no default) and recorded', async (t) => {
+  const { ledger, filePath } = await setup(t);
+  const i = intent({ id: 'by-required' });
   await recordPendingPaid(ledger, i, pendingPayPalReceipt(i.id) as Receipt);
-  await resolveIntent(i.id, ledger, { status: 'succeeded', note: 'ok' }, () => new Date(NOW));
-  assert.equal((await ledger.get(i.id))?.resolution?.resolvedBy, 'operator');
+  const before = await readFile(filePath, 'utf8');
 
-  const i2 = intent({ id: 'by-custom' });
-  await recordPendingPaid(ledger, i2, pendingPayPalReceipt(i2.id) as Receipt);
+  for (const input of [
+    { status: 'succeeded', note: 'ok' },
+    { status: 'succeeded', note: 'ok', resolvedBy: '' },
+    { status: 'succeeded', note: 'ok', resolvedBy: '   ' },
+    { status: 'succeeded', note: 'ok', resolvedBy: 'x'.repeat(129) },
+  ] as ResolveInput[]) {
+    await assert.rejects(resolveIntent(i.id, ledger, input), (e: unknown) => {
+      return e instanceof TypeError && /^invalid_resolve: resolvedBy /.test(e.message);
+    });
+  }
+  assert.equal(await readFile(filePath, 'utf8'), before);
+  assert.equal((await ledger.get(i.id))?.resolution, undefined);
+
   await resolveIntent(
-    i2.id,
+    i.id,
     ledger,
     { status: 'succeeded', note: 'ok', resolvedBy: 'alice@example.com' },
     () => new Date(NOW),
   );
-  assert.equal((await ledger.get(i2.id))?.resolution?.resolvedBy, 'alice@example.com');
+  assert.equal((await ledger.get(i.id))?.resolution?.resolvedBy, 'alice@example.com');
+
+  const i2 = intent({ id: 'by-max' });
+  await recordPendingPaid(ledger, i2, pendingPayPalReceipt(i2.id) as Receipt);
+  await resolveIntent(i2.id, ledger, { status: 'failed', note: 'ok', resolvedBy: 'b'.repeat(128) }, () => new Date(NOW));
+  assert.equal((await ledger.get(i2.id))?.resolution?.resolvedBy, 'b'.repeat(128));
 });
 
 test('resolveIntent: second resolve and missing intent / no receipt errors', async (t) => {
   const { ledger } = await setup(t);
   const i = intent();
   await recordPendingPaid(ledger, i, pendingPayPalReceipt(i.id) as Receipt);
-  await resolveIntent(i.id, ledger, { status: 'succeeded', note: 'first' }, () => new Date(NOW));
+  await resolveIntent(i.id, ledger, { status: 'succeeded', note: 'first', resolvedBy: 'ops' }, () => new Date(NOW));
 
-  await assert.rejects(resolveIntent(i.id, ledger, { status: 'failed', note: 'again' }), (e: unknown) => {
+  await assert.rejects(resolveIntent(i.id, ledger, { status: 'failed', note: 'again', resolvedBy: 'ops' }), (e: unknown) => {
     return e instanceof PaymentError && e.code === 'receipt_not_pending';
   });
 
-  await assert.rejects(resolveIntent('missing', ledger, { status: 'succeeded', note: 'x' }), (e: unknown) => {
+  await assert.rejects(resolveIntent('missing', ledger, { status: 'succeeded', note: 'x', resolvedBy: 'ops' }), (e: unknown) => {
     return e instanceof PaymentError && e.code === 'intent_not_found';
   });
 
   await ledger.recordIntent(intent({ id: 'no-rcpt' }));
   await ledger.recordDecision('no-rcpt', { status: 'approved', reason: 'within_policy: test' });
   await ledger.recordPayment('no-rcpt', 'paid');
-  await assert.rejects(resolveIntent('no-rcpt', ledger, { status: 'succeeded', note: 'x' }), (e: unknown) => {
+  await assert.rejects(resolveIntent('no-rcpt', ledger, { status: 'succeeded', note: 'x', resolvedBy: 'ops' }), (e: unknown) => {
     return e instanceof PaymentError && e.code === 'no_receipt';
   });
 });
@@ -158,9 +173,9 @@ test('resolveIntent: invalid status or note rejects without ledger change', asyn
   const before = await readFile(filePath, 'utf8');
 
   for (const input of [
-    { status: 'pending', note: 'ok' },
-    { status: 'succeeded', note: '' },
-    { status: 'succeeded', note: '   ' },
+    { status: 'pending', note: 'ok', resolvedBy: 'ops' },
+    { status: 'succeeded', note: '', resolvedBy: 'ops' },
+    { status: 'succeeded', note: '   ', resolvedBy: 'ops' },
   ] as ResolveInput[]) {
     await assert.rejects(resolveIntent(i.id, ledger, input), (e: unknown) => {
       return e instanceof TypeError && /^invalid_resolve: /.test(e.message);

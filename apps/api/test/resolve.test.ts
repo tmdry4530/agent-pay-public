@@ -100,7 +100,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   const failRes = await fetch(`${base}/intents/pi_fail_resolve/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'failed', note: 'duplicate batch id' }),
+    body: JSON.stringify({ status: 'failed', note: 'duplicate batch id', resolvedBy: 'ops' }),
   });
   assert.equal(failRes.status, 200);
   const failed = (await failRes.json()) as {
@@ -110,7 +110,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   };
   assert.equal(failed.status, 'failed');
   assert.equal(failed.receipt.status, 'failed');
-  assert.equal(failed.resolution.resolvedBy, 'operator');
+  assert.equal(failed.resolution.resolvedBy, 'ops');
   assert.equal(failed.resolution.note, 'duplicate batch id');
   assert.equal(failed.receipt.meta?.needsManualResolve, 'true');
   assert.equal(counts.payCalls, baselinePay);
@@ -172,7 +172,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   const refundRes = await fetch(`${base}/intents/pi_refund_resolve/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'refunded', note: 'chargeback settled' }),
+    body: JSON.stringify({ status: 'refunded', note: 'chargeback settled', resolvedBy: 'ops' }),
   });
   assert.equal(refundRes.status, 200);
   assert.equal(counts.payCalls, baselinePay + 2);
@@ -184,7 +184,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   const again = await fetch(`${base}/intents/pi_ok_resolve/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'failed', note: 'too late' }),
+    body: JSON.stringify({ status: 'failed', note: 'too late', resolvedBy: 'ops' }),
   });
   assert.equal(again.status, 409);
   assert.match(await readError(again), /^receipt_not_pending: /);
@@ -199,7 +199,7 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
   const missing = await fetch(`${base}/intents/nope/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'succeeded', note: 'x' }),
+    body: JSON.stringify({ status: 'succeeded', note: 'x', resolvedBy: 'ops' }),
   });
   assert.equal(missing.status, 404);
   assert.match(await readError(missing), /^intent_not_found: /);
@@ -213,7 +213,7 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
   const noReceipt = await fetch(`${base}/intents/pi_needs_approval/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'succeeded', note: 'x' }),
+    body: JSON.stringify({ status: 'succeeded', note: 'x', resolvedBy: 'ops' }),
   });
   assert.equal(noReceipt.status, 409);
   assert.match(await readError(noReceipt), /^no_receipt: /);
@@ -239,7 +239,7 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
   const settled = await fetch(`${baseDone}/intents/pi_already_done/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'succeeded', note: 'x' }),
+    body: JSON.stringify({ status: 'succeeded', note: 'x', resolvedBy: 'ops' }),
   });
   assert.equal(settled.status, 409);
   assert.match(await readError(settled), /^receipt_not_pending: /);
@@ -257,32 +257,47 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'pending', note: 'n' }),
+      body: JSON.stringify({ status: 'pending', note: 'n', resolvedBy: 'ops' }),
     },
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'bogus', note: 'n' }),
+      body: JSON.stringify({ status: 'bogus', note: 'n', resolvedBy: 'ops' }),
     },
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'succeeded' }),
+      body: JSON.stringify({ status: 'succeeded', resolvedBy: 'ops' }),
     },
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'succeeded', note: '   ' }),
+      body: JSON.stringify({ status: 'succeeded', note: '   ', resolvedBy: 'ops' }),
     },
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'succeeded', note: 'n', extra: true }),
+      body: JSON.stringify({ status: 'succeeded', note: 'n', resolvedBy: 'ops', extra: true }),
     },
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'succeeded', note: 'n', resolvedBy: '' }),
+    },
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'succeeded', note: 'n' }),
+    },
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'succeeded', note: 'n', resolvedBy: '   ' }),
+    },
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'succeeded', note: 'n', resolvedBy: 'x'.repeat(129) }),
     },
   ];
 
@@ -295,4 +310,14 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
     const ledgerNow = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;
     assert.deepEqual(ledgerNow, ledgerSnap);
   }
+
+  const maxLen = await fetch(`${base}/intents/pi_validation/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'succeeded', note: 'n', resolvedBy: 'x'.repeat(128) }),
+  });
+  assert.equal(maxLen.status, 200);
+  assert.equal(((await maxLen.json()) as { resolution: { resolvedBy: string } }).resolution.resolvedBy, 'x'.repeat(128));
+  assert.equal(counts.payCalls, baselinePay);
+  assert.equal(counts.statusCalls, 0);
 });

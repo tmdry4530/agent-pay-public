@@ -6,11 +6,14 @@ each scene lists its narration word count against the words its time slot allows
 ## Recording setup
 
 - API on the mock rail with an empty ledger (no real funds move):
-  `LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm start -w @agent-pay/api` → `http://127.0.0.1:8787`, `rail=mock`.
+  `RAIL=mock LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm run api` → `http://127.0.0.1:8787`, `rail=mock`
+  (`npm run api` loads the root `.env` if one exists; `RAIL=mock` in the shell takes precedence over it).
 - Web demo against that API, from `apps/web`: `VITE_API_BASE=http://127.0.0.1:8787 pnpm dev`. The header badge
-  shows `API: http://127.0.0.1:8787` and the rail row shows "Rail is selected by the API server: mock".
-  (Without `VITE_API_BASE` the web demo runs fully in the browser with an in-memory ledger; the scenes below
-  look the same except for the header badge, which then reads `MOCK — no real funds`.)
+  shows `API: http://127.0.0.1:8787`. The rail toggle (**Mock** / **PayPal** / **NEAR**) is disabled in this mode
+  and only highlights the rail the API reports on `GET /health` (**Mock**), with the note "Rail is selected by the
+  API server: mock". (Without `VITE_API_BASE` the web demo runs fully in the browser with an in-memory ledger: the
+  header badge reads `MOCK — no real funds`, and the toggle can be switched before a run, but all three options use
+  simulated adapters, so receipts show rail "Mock", "PayPal (mock)" or "NEAR (mock)".)
 - The web scenario cards are fixed: **Buy API credits** (`openai-api`, $12.00), **Rent GPU cluster**
   (`near-compute`, $480.00), **Buy NEAR compute hours** (`near-compute`, $75.00). Each run is: click the card →
   **Get quote** → **Run policy check & pay**. The web approver name is `demo-operator`.
@@ -22,8 +25,9 @@ each scene lists its narration word count against the words its time slot allows
 ### Scene 1 — Intro (0:00–0:20, 20 s)
 
 **On screen:** Web demo, initial state. Three scenario cards on the left; the pipeline stepper (Task, Quote,
-Policy, Decision, Approval, Payment, Receipt) in the middle; "Spending limit" panel on the right reading
-"Per-tx max $100.00 · approval above $50.00", "Spent today $0.00", "Daily max $200.00"; empty Ledger panel.
+Policy, Decision, Approval, Payment, Receipt) in the middle, with the disabled **Mock** / **PayPal** / **NEAR** rail
+toggle (Mock highlighted) and "Rail is selected by the API server: mock" under it; "Spending limit" panel on the
+right reading "Per-tx max $100.00 · approval above $50.00", "Spent today $0.00", "Daily max $200.00"; empty Ledger panel.
 
 **Narration (44 words / max 50):**
 AI agents are starting to spend money, but an API key alone has no limits. agent-pay puts a policy between the
@@ -59,8 +63,8 @@ receipt is created, and the daily total does not move.
 pay**. Stepper stops at Approval. Decision card: badge NEEDS APPROVAL, reason code `approval_required`, "amount
 75 is above approval threshold 50". **Approve** and **Deny** buttons appear. Gauge still "Spent today $12.00".
 
-**Narration (54 words / max 62):**
-Now seventy-five dollars of compute hours. It is inside the hard limits but above the fifty dollar approval
+**Narration (55 words / max 62):**
+Now seventy-five dollars of NEAR compute hours. It is inside the hard limits but above the fifty dollar approval
 threshold, so the decision is needs approval. Nothing is paid yet. The intent sits in the ledger until a human
 approves or denies it, here in the UI or with a call to the approve endpoint.
 
@@ -94,8 +98,8 @@ instead of paying twice.
 npm run -s agent -- --scenario small --json
 ```
 
-(`-s` keeps npm's `> agent` banner out of the NDJSON. The recorded `docs/demo/agent-pay-submission.webm` shows the
-equivalent workspace form `npm run -s agent -w @agent-pay/agent -- --scenario small --json`.)
+(`-s` keeps npm's `> agent` banner out of the NDJSON. The recorded `docs/demo/agent-pay-submission.webm` shows this
+same root command, `npm run -s agent -- --scenario small --json`.)
 
 NDJSON scrolls by: `health`, `task`, `quote`, `submit_intent`, `intent_result` step events, then one `summary` line.
 Highlight `"apiStatus":"paid"` and `"exitCode":0`. Excerpt from a real local run (ids and timestamps differ per
@@ -108,8 +112,8 @@ run):
 
 End card: "agent-pay: policy-guarded payments for AI agents."
 
-**Narration (71 words / max 87):**
+**Narration (78 words / max 87):**
 The same API serves a task-agent CLI. Given "buy 1M tokens of GPT inference", a rule-based planner quotes ten
 dollars to openai-api and submits the intent. With the json flag, every step is one JSON line, ending in a
-summary with the status, receipt, and exit code: zero for paid, two for rejected, three if a wait times out. The
-same run works on PayPal sandbox payouts and NEAR testnet transfers.
+summary with the status, receipt, and exit code: zero for paid, two for rejected, three if a wait times out. It is
+wired to PayPal Payouts sandbox and NEAR testnet adapters; this demo was recorded on the mock rail.

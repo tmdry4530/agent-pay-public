@@ -300,3 +300,9 @@ unknown value) exits 1 with `unknown_rail: RAIL must be one of mock|paypal|near`
    page lists its free-tier limit as "Not published".
 6. Whether the default NEAR demo payee `demo-merchant.testnet` exists on testnet. Setting `DEMO_PAYEES` avoids
    the question.
+7. Which HTTP status PayPal returns for each named Payouts error. The docs list the error names but not their HTTP
+   statuses, so the adapter tests assume 400 or 403.
+8. Whether a `VALIDATION_ERROR` whose details mention `sender_batch_id` can really occur. The duplicate check
+   catches it, so it stays `pending` (`needsManualResolve`) instead of `failed`.
+9. Whether every NEAR RPC node we use returns `final_execution_status`. On older nodes that don't, the payment
+   always stays `pending` and needs `POST /intents/:id/resolve` or a refresh against a node that does.
