@@ -124,9 +124,10 @@ export default function App() {
 
   useEffect(() => {
     if (client.kind !== 'http' || client.getHealth === undefined) return;
+    const getHealth = client.getHealth;
     void (async () => {
       try {
-        const health = await client.getHealth();
+        const health = await getHealth();
         setServerRail(health.rail);
       } catch (e) {
         setError(

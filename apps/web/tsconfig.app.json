@@ -21,7 +21,7 @@
       "@agent-pay/core": ["../../packages/core/src/index.ts"],
       "@agent-pay/core/*": ["../../packages/core/src/*"]
     },
-    "types": ["node", "vite/client"]
+    "types": ["node", "vite/client", "vitest/globals"]
   },
   "include": ["src"]
 }
