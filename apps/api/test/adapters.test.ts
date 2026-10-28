@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { PaymentIntent, Rail } from '@agent-pay/core';
 import {
   AdapterConfigError,
@@ -38,10 +39,23 @@ test('parseRail("bogus") throws AdapterConfigError', () => {
   assert.throws(() => parseRail('bogus'), AdapterConfigError);
 });
 
-test('createAdapter rejects unwired paypal and near rails', async () => {
+test('createAdapter rejects the unwired near rail', async () => {
   const ctx = { env: {}, now: NOW };
-  await assert.rejects(createAdapter('paypal', ctx), /adapter not wired yet/);
-  await assert.rejects(createAdapter('near', ctx), /adapter not wired yet/);
+  await assert.rejects(createAdapter('near', ctx), /adapter_not_wired: near adapter not wired yet/);
+});
+
+test('paypal is wired to packages/adapters and needs credentials from env', async () => {
+  await assert.rejects(createAdapter('paypal', { env: {}, now: NOW }), (err: unknown) => {
+    assert.ok(err instanceof AdapterConfigError);
+    assert.match(err.message, /^adapter_config: PAYPAL_CLIENT_ID environment variable is required/);
+    return true;
+  });
+  // Placeholder values: building the adapter makes no network call.
+  const adapter = await createAdapter('paypal', {
+    env: { PAYPAL_CLIENT_ID: 'test-id', PAYPAL_CLIENT_SECRET: 'test-secret', PAYPAL_BASE_URL: 'http://127.0.0.1:9' },
+    now: NOW,
+  });
+  assert.equal(adapter.rail, 'paypal');
 });
 
 test('createAdapter("mock") pays with a succeeded receipt matching the intent', async () => {
@@ -86,11 +100,28 @@ test('createAdapter uses a custom registry plug-in for paypal', async () => {
   assert.equal(adapter.rail, 'paypal');
 });
 
+async function runMainExpectingFailure(env: Record<string, string>): Promise<string> {
+  const mainPath = join(import.meta.dirname, '../src/main.ts');
+  const { PAYPAL_CLIENT_ID: _id, PAYPAL_CLIENT_SECRET: _secret, ...baseEnv } = process.env;
+  try {
+    await execFileAsync(process.execPath, [mainPath], { env: { ...baseEnv, PORT: '0', ...env }, timeout: 10_000, encoding: 'utf8' });
+  } catch (err: unknown) {
+    const e = err as { code?: number; stderr?: string };
+    assert.equal(e.code, 1);
+    return e.stderr ?? '';
+  }
+  return assert.fail('expected main to exit with code 1');
+}
+
+test('main entrypoint exits 1 for RAIL=paypal without credentials', async () => {
+  assert.match(await runMainExpectingFailure({ RAIL: 'paypal' }), /PAYPAL_CLIENT_ID environment variable is required/);
+});
+
 test('main entrypoint exits 1 when RAIL=near is not wired', async () => {
   const mainPath = join(import.meta.dirname, '../src/main.ts');
   try {
     await execFileAsync(process.execPath, [mainPath], {
-      env: { ...process.env, RAIL: 'near', PORT: '0' },
+      env: { ...process.env, RAIL: 'near', PORT: '0', LEDGER_PATH: join(tmpdir(), 'agent-pay-unused', 'ledger.json') },
       timeout: 10_000,
       encoding: 'utf8',
     });

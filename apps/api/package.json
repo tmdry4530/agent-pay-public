@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@agent-pay/adapters": "0.1.0",
     "@agent-pay/core": "0.1.0"
   },
   "scripts": {

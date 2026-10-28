@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createPayPalAdapter, payPalConfigFromEnv } from '@agent-pay/adapters';
 import type { PaymentAdapter, PaymentIntent, Rail, Receipt } from '@agent-pay/core';
 
 export const RAILS: readonly Rail[] = ['mock', 'paypal', 'near'];
@@ -37,13 +38,28 @@ export function createMockAdapter(ctx: Pick<AdapterContext, 'now'> = { now: () =
 }
 
 /**
+ * PayPal sandbox (packages/adapters, 개발팀3). Credentials come only from the
+ * environment (PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, optional PAYPAL_BASE_URL);
+ * missing ones fail at startup. No network call happens until the first pay().
+ */
+export const paypalFactory: AdapterFactory = (ctx) => {
+  let config;
+  try {
+    config = payPalConfigFromEnv({ ...ctx.env });
+  } catch (err) {
+    throw new AdapterConfigError(`adapter_config: ${err instanceof Error ? err.message : String(err)} (RAIL=paypal)`);
+  }
+  return createPayPalAdapter(config);
+};
+
+/**
  * Rail -> factory. `undefined` means the rail is known but not wired yet.
  * 개발팀3: wire a rail by replacing its `undefined` with a factory, e.g.
- *   paypal: (ctx) => createPaypalSandboxAdapter({ clientId: ctx.env.PAYPAL_CLIENT_ID, ... }),
+ *   near: (ctx) => createNearTestnetAdapter(nearConfigFromEnv(ctx.env)),
  */
 export const adapterRegistry: Record<Rail, AdapterFactory | undefined> = {
   mock: (ctx) => createMockAdapter(ctx),
-  paypal: undefined,
+  paypal: paypalFactory,
   near: undefined,
 };
 

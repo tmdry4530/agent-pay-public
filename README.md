@@ -22,7 +22,8 @@ npm start -w @agent-pay/api                    # http://127.0.0.1:8787, RAIL=moc
 | `PORT` | `8787` | `0` = random port |
 | `HOST` | `127.0.0.1` | bind address |
 | `LEDGER_PATH` | `apps/api/.data/ledger.json` (resolved from the api package, gitignored) | single writer process per file |
-| `RAIL` | `mock` | `mock` \| `paypal` \| `near`. A rail without a wired adapter exits at startup with `adapter_not_wired: <rail> adapter not wired yet` |
+| `RAIL` | `mock` | `mock` \| `paypal` \| `near`. `near` is not wired yet and exits at startup with `adapter_not_wired: near adapter not wired yet` |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit). Missing → exits at startup with `adapter_config: …` |
 
 ### Policy
 Kept **in memory** (one policy, one agent), seeded with `DEFAULT_POLICY`:
@@ -64,7 +65,13 @@ get no CORS headers.
 `apps/api/src/adapters.ts`:
 ```ts
 type AdapterFactory = (ctx: { env; now: () => Date }) => PaymentAdapter | Promise<PaymentAdapter>;
-export const adapterRegistry: Record<Rail, AdapterFactory | undefined> = { mock, paypal: undefined, near: undefined };
+export const adapterRegistry: Record<Rail, AdapterFactory | undefined> = {
+  mock: (ctx) => createMockAdapter(ctx),     // apps/api mock: always succeeded
+  paypal: paypalFactory,                     // createPayPalAdapter(payPalConfigFromEnv(ctx.env)) from @agent-pay/adapters
+  near: undefined,                           // not wired yet
+};
 ```
-Wire a rail by replacing its `undefined` with a factory. `createAdapter(rail, ctx)` throws `adapter_not_wired` for
+Wire a rail by replacing its `undefined` with a factory (e.g. `near: (ctx) => createNearAdapter(nearConfigFromEnv(ctx.env))`).
+Note: the PayPal adapter does Orders v2 create + capture; without buyer approval PayPal answers `ORDER_NOT_APPROVED`,
+which comes back as a `failed` result (see packages/adapters/README.md). `createAdapter(rail, ctx)` throws `adapter_not_wired` for
 an empty slot and `adapter_mismatch` if the factory returns an adapter for a different rail.
