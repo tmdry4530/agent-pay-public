@@ -162,7 +162,10 @@ export class Ledger {
       if (entry.paymentStatus === undefined) {
         throw new LedgerError(`intent ${intentId} has no payment recorded`);
       }
-      entry.receipt = { ...receipt };
+      entry.receipt = {
+        ...receipt,
+        ...(receipt.meta ? { meta: { ...receipt.meta } } : {}),
+      };
       entry.updatedAt = this.#now().toISOString();
       return entry;
     });

@@ -45,11 +45,13 @@ export type ReceiptStatus = 'succeeded' | 'pending' | 'failed' | 'refunded';
 export interface Receipt {
   intentId: string;
   rail: Rail;
-  /** Rail-side id: PayPal order/capture id, NEAR tx hash, mock id. */
+  /** Rail-side id: PayPal payout_batch_id (or order/capture id for paypal-orders), NEAR tx hash, mock id. */
   externalId: string;
   status: ReceiptStatus;
   /** ISO 8601 timestamp. */
   at: string;
+  /** Optional rail-specific string ids/details (e.g. PayPal payout_item_id). Never put secrets here. */
+  meta?: Record<string, string>;
 }
 
 /** Snapshot of ledger data that `evaluate` needs. */
