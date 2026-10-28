@@ -84,6 +84,7 @@ test('round-trip intent -> decision -> payment -> receipt survives a new instanc
   assert.deepEqual(entry, {
     intent: i,
     decision: { status: 'approved', reason: 'within_policy: ok' },
+    decisions: [{ status: 'approved', reason: 'within_policy: ok', at: '2026-10-28T10:00:00.500Z' }],
     paymentStatus: 'paid',
     receipt: r,
     recordedAt: '2026-10-28T10:00:00.500Z',
