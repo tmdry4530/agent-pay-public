@@ -15,7 +15,13 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@agent-pay/core": ["../../packages/core/src/index.ts"],
+      "@agent-pay/core/*": ["../../packages/core/src/*"]
+    },
+    "types": ["node", "vite/client"]
   },
   "include": ["src"]
 }

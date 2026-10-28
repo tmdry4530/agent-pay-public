@@ -404,6 +404,87 @@ dd {
   color: var(--muted);
 }
 
+.result-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.result-badge.status-paid {
+  border-color: rgba(62, 207, 142, 0.45);
+  color: var(--success);
+}
+
+.result-badge.status-rejected {
+  border-color: rgba(240, 113, 120, 0.45);
+  color: var(--danger);
+}
+
+.result-badge.status-needs_approval {
+  border-color: rgba(230, 180, 80, 0.45);
+  color: var(--warn);
+}
+
+.result-badge.status-failed {
+  border-color: rgba(240, 113, 120, 0.45);
+  color: var(--danger);
+}
+
+.reason-code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0 0 0.25rem;
+}
+
+.human-outcome {
+  font-weight: 600;
+  margin-top: 0.75rem;
+  color: var(--success);
+}
+
+.receipt-status--succeeded {
+  color: var(--success);
+}
+
+.receipt-status--pending {
+  color: var(--warn);
+}
+
+.receipt-status--failed,
+.receipt-status--refunded {
+  color: var(--danger);
+}
+
+.rail-note {
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+}
+
+.stepper-mobile-label {
+  display: none;
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.ledger-detail {
+  color: var(--muted);
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.stepper__label {
+  white-space: nowrap;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -417,23 +498,6 @@ dd {
 
   .sidebar {
     order: 3;
-  }
-
-  .stepper {
-    flex-wrap: wrap;
-    overflow-x: visible;
-    gap: 0.35rem 0.5rem;
-  }
-
-  .stepper__step {
-    padding: 0.35rem 0.55rem;
-    font-size: 0.75rem;
-  }
-
-  .stepper__dot {
-    width: 1.25rem;
-    height: 1.25rem;
-    font-size: 0.65rem;
   }
 }
 
@@ -454,7 +518,26 @@ dd {
     width: 100%;
   }
 
-  .stepper__step span:not(.stepper__dot) {
-    display: none;
+  .stepper-mobile-label {
+    display: block;
+  }
+
+  .stepper {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 0.35rem;
+    padding-bottom: 0.25rem;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .stepper__step {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.72rem;
+  }
+
+  .stepper__dot {
+    width: 1.15rem;
+    height: 1.15rem;
+    font-size: 0.62rem;
   }
 }

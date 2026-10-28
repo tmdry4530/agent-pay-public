@@ -3,10 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import App from '../App';
 import { ClientProvider } from '../data/ClientContext';
+import { createInMemoryClient } from '../data/inMemoryClient';
 
 function renderApp() {
   return render(
-    <ClientProvider>
+    <ClientProvider client={createInMemoryClient()}>
       <App />
     </ClientProvider>,
   );
@@ -22,9 +23,22 @@ describe('App smoke', () => {
     await user.click(screen.getByTestId('scenario-approved'));
     await user.click(screen.getByTestId('btn-quote'));
     await user.click(screen.getByTestId('btn-policy'));
-    await user.click(screen.getByTestId('btn-pay'));
 
-    expect(await screen.findByTestId('receipt')).toHaveTextContent(/MOCK-TX-/);
+    expect(await screen.findByTestId('receipt')).toHaveTextContent(/mock_/);
+  });
+
+  it('needs-approval flow shows human outcome after approve', async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(screen.getByTestId('scenario-needs-approval'));
+    await user.click(screen.getByTestId('btn-quote'));
+    await user.click(screen.getByTestId('btn-policy'));
+    await user.click(screen.getByTestId('btn-approve'));
+
+    expect(await screen.findByTestId('human-outcome')).toHaveTextContent(
+      /Approved by human \(demo-operator\)/,
+    );
   });
 
   it('accumulates spend and ledger across scenarios until reset', async () => {
@@ -34,27 +48,22 @@ describe('App smoke', () => {
     await user.click(screen.getByTestId('scenario-approved'));
     await user.click(screen.getByTestId('btn-quote'));
     await user.click(screen.getByTestId('btn-policy'));
-    await user.click(screen.getByTestId('btn-pay'));
     await screen.findByTestId('receipt');
 
     await user.click(screen.getByTestId('scenario-needs-approval'));
     await user.click(screen.getByTestId('btn-quote'));
     await user.click(screen.getByTestId('btn-policy'));
     await user.click(screen.getByTestId('btn-approve'));
-    await user.click(screen.getByTestId('btn-pay'));
     await screen.findByTestId('receipt');
 
     const gauge = screen.getByTestId('gauge');
     expect(within(gauge).getByText(/\$87\.00/)).toBeInTheDocument();
 
     const ledger = screen.getByTestId('ledger');
-    expect(within(ledger).getAllByText('intent_created')).toHaveLength(2);
-    expect(within(ledger).getAllByText('payment_settled')).toHaveLength(2);
+    expect(within(ledger).getAllByText('intent recorded')).toHaveLength(2);
 
     await user.click(screen.getByTestId('btn-reset'));
 
-    expect(within(gauge).getByText(/Spent today/i).textContent).toMatch(
-      /\$0\.00/,
-    );
+    expect(within(gauge).getByText(/Spent today/i).textContent).toMatch(/\$0\.00/);
   });
 });

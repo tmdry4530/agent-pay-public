@@ -1,6 +1,6 @@
 import { useContext } from 'react';
 import { AgentPayClientContext } from './agentPayClientContext';
-import type { AgentPayClient } from './inMemoryClient';
+import type { AgentPayClient } from './agentPayClient';
 
 export function useAgentPayClient(): AgentPayClient {
   const client = useContext(AgentPayClientContext);

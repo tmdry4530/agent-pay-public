@@ -1,60 +1,20 @@
-// TODO: switch to @agent-pay/core types once packages/core is published by 개발팀1
+// Domain types re-exported from packages/core; web-only demo types live below.
 
-export type Rail = 'mock' | 'paypal' | 'near';
+export type {
+  Currency,
+  Decision,
+  DecisionStatus,
+  PaymentIntent,
+  Policy,
+  Rail,
+  Receipt,
+  ReceiptStatus,
+} from '@agent-pay/core';
 
-export type PaymentIntent = {
-  id: string;
-  agentId: string;
-  payee: string;
-  amount: number;
-  currency: string;
-  purpose: string;
-  createdAt: string;
-};
+export type { PaymentResult, RunStatus } from '@agent-pay/core';
+export type { LedgerEntry } from '@agent-pay/core';
 
-export type Decision = {
-  status: 'approved' | 'rejected' | 'needs_approval';
-  reason: string;
-};
-
-export type Receipt = {
-  intentId: string;
-  rail: Rail;
-  externalId: string;
-  status: 'settled' | 'failed';
-  at: string;
-};
-
-export type Policy = {
-  agentId: string;
-  dailyLimit: number;
-  perTxCap: number;
-  autoApproveBelow: number;
-  allowedPayees: string[];
-  currency: string;
-};
-
-export type LedgerEventType =
-  | 'intent_created'
-  | 'policy_decision'
-  | 'human_approved'
-  | 'human_denied'
-  | 'payment_settled'
-  | 'receipt';
-
-export type LedgerEvent = {
-  id: string;
-  type: LedgerEventType;
-  at: string;
-  intentId?: string;
-  amount?: number;
-  currency?: string;
-  rail?: Rail;
-  externalId?: string;
-  decision?: Decision;
-  purpose?: string;
-  payee?: string;
-};
+export type { LedgerSnapshot } from './data/agentPayClient';
 
 export type AgentTask = {
   purpose: string;
@@ -75,7 +35,7 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     label: 'Buy API credits',
     task: {
       purpose: 'Buy API credits',
-      payee: 'openai.example',
+      payee: 'openai-api',
       amount: 12,
     },
     testId: 'scenario-approved',
@@ -85,17 +45,17 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     label: 'Rent GPU cluster',
     task: {
       purpose: 'Rent GPU cluster',
-      payee: 'gpu-cloud.example',
+      payee: 'near-compute',
       amount: 480,
     },
     testId: 'scenario-rejected',
   },
   {
     id: 'needs_approval',
-    label: 'Purchase dataset license',
+    label: 'Buy NEAR compute hours',
     task: {
-      purpose: 'Purchase dataset license',
-      payee: 'data-market.example',
+      purpose: 'Buy NEAR compute hours',
+      payee: 'near-compute',
       amount: 75,
     },
     testId: 'scenario-needs-approval',
@@ -110,3 +70,5 @@ export type PipelineStep =
   | 'approval'
   | 'payment'
   | 'receipt';
+
+export type { TimelineEvent } from './data/ledgerTimeline';
