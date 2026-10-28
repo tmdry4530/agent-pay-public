@@ -9,12 +9,25 @@
 | `PORT` | `8787` | `0` = random port |
 | `HOST` | `127.0.0.1` | bind address |
 | `LEDGER_PATH` | `apps/api/.data/ledger.json` (resolved from the api package, gitignored) | single writer process per file |
-| `RAIL` | `mock` | `mock` \| `paypal` \| `near`. `near` is not wired yet and exits at startup with `adapter_not_wired: near adapter not wired yet` |
+| `RAIL` | `mock` | `mock` \| `paypal` \| `near`. Missing credentials for a wired rail → exits at startup with `adapter_config: …` |
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit). Missing → exits at startup with `adapter_config: …` |
+| `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK?`, `NEAR_RPC_URL?` | | only for `RAIL=near` |
+| `DEMO_PAYEES` | | optional for `RAIL=paypal` or `near` only: comma-separated `name=address` pairs (whitespace trimmed). When non-empty, **replaces** the default logical→address map entirely. Invalid syntax or payee for the rail → startup error `demo_payees: … (RAIL=…)`. Ignored for `mock`. |
+
+## Per-rail demo seed
+
+At startup, `railSeed(RAIL, process.env)` selects policy limits, currency, amount scale, and logical payee addresses:
+
+| Rail | Currency | amountScale | Policy highlights | Default payees (logical → address) |
+|------|----------|-------------|-------------------|-------------------------------------|
+| `mock` | USD | 1 | Same as `DEFAULT_POLICY`; payees are identity (`openai-api` → `openai-api`, …) | identity map |
+| `paypal` | USD | 1 | Same USD limits as mock; `allowedPayees` are merchant **emails** | `openai-api` → `merchant@example.com`, … |
+| `near` | NEAR | 0.01 | `perTxMax` 1, `dailyMax` 2, `requireApprovalAbove` 0.5 | all four logical names → `demo-merchant.testnet` (must match `NEAR_NETWORK`; mainnet requires `DEMO_PAYEES`) |
+
+`policy.allowedPayees` is the de-duplicated list of rail addresses (insertion order). The agent reads `GET /rail` to map planner logical payees and scale USD quote amounts (e.g. scenario `small` 10 USD → 0.1 NEAR when `amountScale` is 0.01).
 
 ## Policy
-Kept **in memory** (one policy, one agent), seeded with `DEFAULT_POLICY`:
-`{agentId: "demo-agent", perTxMax: 100, dailyMax: 200, allowedPayees: ["openai-api","anthropic-api","vercel","near-compute"], requireApprovalAbove: 50, currency: "USD"}`.
+Kept **in memory** (one policy, one agent), seeded from `railSeed` (mock uses exported `DEFAULT_POLICY` unchanged):
 `PUT /policy` replaces it until restart. The ledger is on disk; the policy is not.
 
 ## Endpoints
@@ -23,6 +36,7 @@ All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
 | method & path | request | response |
 |---|---|---|
 | `GET /health` | | `200 {ok: true, rail}` |
+| `GET /rail` | | `200 {rail, currency, amountScale, payees}` — demo mapping for agents (defaults: policy currency, scale 1, `{}`) |
 | `POST /intents` | `{agentId, payee, amount, currency, purpose, id?, createdAt?}` | `201` (new) / `200` (replay) `PaymentResult & {intent}` = `{intentId, status: paid\|rejected\|needs_approval\|failed, decision, receipt?, error?, replayed?, intent}` |
 | `POST /intents/:id/approve` | optional `{approver?}` | `200 PaymentResult` (`paid`, or `rejected` if the re-check fails) |
 | `POST /intents/:id/reject` | optional `{approver?, note?}` | `200 PaymentResult` (`rejected`, reason `rejected_by_human: …`) |
@@ -58,10 +72,7 @@ type AdapterFactory = (ctx: { env; now: () => Date }) => PaymentAdapter | Promis
 export const adapterRegistry: Record<Rail, AdapterFactory | undefined> = {
   mock: (ctx) => createMockAdapter(ctx),     // apps/api mock: always succeeded
   paypal: paypalFactory,                     // createPayPalAdapter(payPalConfigFromEnv(ctx.env)) from @agent-pay/adapters
-  near: undefined,                           // not wired yet
+  near: nearFactory,
 };
 ```
-Wire a rail by replacing its `undefined` with a factory (e.g. `near: (ctx) => createNearAdapter(nearConfigFromEnv(ctx.env))`).
-Note: the PayPal adapter does Orders v2 create + capture; without buyer approval PayPal answers `ORDER_NOT_APPROVED`,
-which comes back as a `failed` result (see packages/adapters/README.md). `createAdapter(rail, ctx)` throws `adapter_not_wired` for
-an empty slot and `adapter_mismatch` if the factory returns an adapter for a different rail.
+Wire a rail by replacing its `undefined` with a factory. `createAdapter(rail, ctx)` throws `adapter_not_wired` for an empty slot and `adapter_mismatch` if the factory returns an adapter for a different rail. PayPal here is **Payouts v1** (`createPayPalAdapter`), not Orders v2.

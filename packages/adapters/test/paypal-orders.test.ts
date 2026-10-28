@@ -8,6 +8,7 @@ import {
   PayPalApiError,
 } from '../src/paypal-client.ts';
 import type { PaymentIntent, ReceiptStatus } from '../src/index.ts';
+import type { RailReceipt } from '../src/adapter-types.ts';
 
 const TEST_CLIENT = 'test-client-id';
 const TEST_SECRET = 'test-client-secret';
@@ -196,7 +197,7 @@ describe('createPayPalOrdersAdapter pay happy path', () => {
 
     assert.equal(receipt.externalId, 'CAPTURE-123');
     assert.equal(receipt.status, 'succeeded');
-    assert.equal(receipt.rail, 'paypal');
+    assert.equal(receipt.rail, 'paypal-orders');
     assert.equal(receipt.intentId, 'intent-abc');
   });
 });
@@ -408,7 +409,7 @@ describe('refund', () => {
     });
     const receipt = await adapter.refund!({
       intentId: 'intent-abc',
-      rail: 'paypal',
+      rail: 'paypal-orders',
       externalId: 'CAP-999',
       status: 'succeeded',
       at: '2026-01-01T00:00:00.000Z',
@@ -437,7 +438,7 @@ describe('refund', () => {
     });
     const receipt = await adapter.refund!({
       intentId: 'i',
-      rail: 'paypal',
+      rail: 'paypal-orders',
       externalId: 'CAP-1',
       status: 'succeeded',
       at: '2026-01-01T00:00:00.000Z',
@@ -445,7 +446,7 @@ describe('refund', () => {
     assert.equal(receipt.status, 'pending');
   });
 
-  it('rejects non-paypal receipt', async () => {
+  it('rejects non-paypal-orders receipt', async () => {
     const { fetchMock } = createFetchMock([tokenRoute()]);
     const adapter = createPayPalOrdersAdapter({
       clientId: TEST_CLIENT,
@@ -460,7 +461,7 @@ describe('refund', () => {
           externalId: 'x',
           status: 'succeeded',
           at: '2026-01-01T00:00:00.000Z',
-        }),
+        } as unknown as RailReceipt<'paypal-orders'>),
       /another rail/,
     );
   });
@@ -476,7 +477,7 @@ describe('refund', () => {
       () =>
         adapter.refund!({
           intentId: 'i',
-          rail: 'paypal',
+          rail: 'paypal-orders',
           externalId: 'CAP-1',
           status: 'failed',
           at: '2026-01-01T00:00:00.000Z',
@@ -579,7 +580,7 @@ describe('contract', () => {
       fetch: fetchMock,
     });
     const paid = await adapter.pay(baseIntent());
-    assert.equal(paid.rail, 'paypal');
+    assert.equal(paid.rail, 'paypal-orders');
 
     const { fetchMock: failFetch } = createFetchMock([
       tokenRoute(),
@@ -596,7 +597,7 @@ describe('contract', () => {
       fetch: failFetch,
     });
     const failed = await failAdapter.pay(baseIntent());
-    assert.equal(failed.rail, 'paypal');
+    assert.equal(failed.rail, 'paypal-orders');
     assert.equal(failed.status, 'pending');
 
     const { fetchMock: refundFetch } = createFetchMock([
@@ -615,12 +616,12 @@ describe('contract', () => {
     });
     const refunded = await refundAdapter.refund!({
       intentId: paid.intentId,
-      rail: 'paypal',
+      rail: 'paypal-orders',
       externalId: 'CAP-1',
       status: 'succeeded',
       at: '2026-01-01T00:00:00.000Z',
     });
-    assert.equal(refunded.rail, 'paypal');
+    assert.equal(refunded.rail, 'paypal-orders');
     assert.equal(refunded.intentId, paid.intentId);
   });
 
@@ -829,7 +830,7 @@ describe('contract', () => {
       (
         await refundAdapter.refund!({
           intentId: 'i',
-          rail: 'paypal',
+          rail: 'paypal-orders',
           externalId: 'CAP-1',
           status: 'succeeded',
           at: '2026-01-01T00:00:00.000Z',
@@ -857,14 +858,14 @@ describe('contract', () => {
     });
     const result = await adapter.refund!({
       intentId: 'intent-abc',
-      rail: 'paypal',
+      rail: 'paypal-orders',
       externalId: 'CAP-404',
       status: 'succeeded',
       at: '2026-01-01T00:00:00.000Z',
     });
     assert.equal(result.status, 'failed');
     assert.equal(result.intentId, 'intent-abc');
-    assert.equal(result.rail, 'paypal');
+    assert.equal(result.rail, 'paypal-orders');
     assert.equal(result.externalId, 'CAP-404');
     assert.ok(errors[0] instanceof PayPalApiError);
   });

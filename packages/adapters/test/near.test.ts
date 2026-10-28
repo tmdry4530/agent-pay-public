@@ -13,8 +13,10 @@ import {
   type NearStatusResult,
   type NearTransferRequest,
   type PaymentIntent,
+  type Receipt,
   type AdapterReceipt,
   type ReceiptStatus,
+  receiptMeta,
 } from '../src/index.ts';
 
 const ALLOWED: ReadonlySet<ReceiptStatus> = new Set(['succeeded', 'pending', 'failed', 'refunded']);
@@ -174,10 +176,10 @@ describe('createNearAdapter', () => {
       assert.equal(receipt.status, item.status, item.name);
       assert.equal(receipt.externalId, item.externalId, item.name);
       assert.equal(receipt.at, AT.toISOString());
-      assert.equal(receipt.meta?.amountYocto, '1000000000000000000000000');
-      assert.equal(receipt.meta?.receiverId, 'bob.testnet');
-      assert.equal(receipt.meta?.network, 'testnet');
-      assert.equal(receipt.meta?.unknownOutcome, item.unknown ? 'true' : undefined, item.name);
+      assert.equal(receiptMeta(receipt)?.amountYocto, '1000000000000000000000000');
+      assert.equal(receiptMeta(receipt)?.receiverId, 'bob.testnet');
+      assert.equal(receiptMeta(receipt)?.network, 'testnet');
+      assert.equal(receiptMeta(receipt)?.unknownOutcome, item.unknown ? 'true' : undefined, item.name);
     }
 
     const errors: unknown[] = [];
@@ -195,7 +197,7 @@ describe('createNearAdapter', () => {
     assertContract(receipt, 'intent-near-1');
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.equal(errors.length, 1);
     const reported = errors[0] as { error: Error; ctx: { intentId: string; op: string } };
     assert.equal(reported.error.message, 'socket down');
@@ -315,7 +317,7 @@ describe('createNearAdapter', () => {
     assert.equal(succeeded.status, 'succeeded');
     assert.equal(succeeded.externalId, 'tx-pending');
     assert.equal(succeeded.rail, 'near');
-    assert.deepEqual(succeeded.meta, pending.meta);
+    assert.deepEqual(receiptMeta(succeeded), pending.meta);
     assert.equal(succeeded.at, AT.toISOString());
 
     const failClient = createFakeClient({
@@ -325,7 +327,7 @@ describe('createNearAdapter', () => {
     assert.equal(failed.status, 'failed');
     assert.equal(failed.intentId, pending.intentId);
     assert.equal(failed.externalId, pending.externalId);
-    assert.deepEqual(failed.meta, pending.meta);
+    assert.deepEqual(receiptMeta(failed), pending.meta);
 
     const missingClient = createFakeClient({ txStatus: () => ({ kind: 'notFound' }) });
     const stillPending = await adapterFor(missingClient).status!(pending);
@@ -368,5 +370,53 @@ describe('createNearAdapter', () => {
     const same = await adapterFor(emptyClient).status!(empty);
     assert.equal(same, empty);
     assert.equal(emptyClient.calls.length, 0);
+  });
+
+  it('status succeeds from plain core Receipt without meta', async () => {
+    const sender = 'signer.testnet';
+    const client = createFakeClient({
+      accountId: sender,
+      txStatus: (hash) => {
+        assert.equal(hash, 'tx-hash-only');
+        return { kind: 'final', success: true };
+      },
+    });
+    const plain: Receipt = {
+      intentId: 'intent-near-1',
+      rail: 'near',
+      externalId: 'tx-hash-only',
+      status: 'pending',
+      at: '2026-01-02T00:00:00.000Z',
+    };
+    assert.equal('meta' in plain, false);
+    const out = await adapterFor(client, { networkId: 'testnet' }).status!(plain);
+    assert.equal(out.status, 'succeeded');
+    assert.equal(receiptMeta(out), undefined);
+    assert.equal(client.calls.length, 1);
+    assert.equal(client.calls[0]?.op, 'status');
+  });
+
+  it('status failed from plain Receipt without meta', async () => {
+    const client = createFakeClient({
+      txStatus: () => ({ kind: 'final', success: false, failure: { err: 'x' } }),
+    });
+    const out = await adapterFor(client).status!({
+      intentId: 'intent-near-1',
+      rail: 'near',
+      externalId: 'tx-bad',
+      status: 'pending',
+      at: '2026-01-02T00:00:00.000Z',
+    });
+    assert.equal(out.status, 'failed');
+  });
+
+  it('pay() to 64-hex implicit account', async () => {
+    const implicit = 'a'.repeat(64);
+    const client = createFakeClient({ accountId: 'alice.testnet' });
+    const adapter = adapterFor(client);
+    const receipt = await adapter.pay(baseIntent({ payee: implicit }));
+    assertContract(receipt, 'intent-near-1');
+    assert.equal(client.calls[0]?.op, 'send');
+    assert.deepEqual((client.calls[0]?.arg as { receiverId: string }).receiverId, implicit);
   });
 });

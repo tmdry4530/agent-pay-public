@@ -19,7 +19,7 @@ export {
   type PayPalConfig,
   type PayPalErrorCode,
 } from './paypal.ts';
-export { createPayPalOrdersAdapter } from './paypal-orders.ts';
+export { createPayPalOrdersAdapter, type PayPalOrdersAdapter } from './paypal-orders.ts';
 export { createNearAdapter, type NearAdapterOptions } from './near.ts';
 export {
   createNearRpcClient,
@@ -32,4 +32,10 @@ export {
 export { parseNearToYocto, formatYoctoToNear } from './near-units.ts';
 export { isValidNearAccountId, isAcceptedPayee } from './near-account.ts';
 export { base58Encode } from './near-rpc.ts';
-export type { AdapterReceipt, StatusCapableAdapter } from './adapter-types.ts';
+export type {
+  AdapterReceipt,
+  AdapterRail,
+  RailReceipt,
+  StatusCapableAdapter,
+} from './adapter-types.ts';
+export { receiptMeta } from './adapter-types.ts';

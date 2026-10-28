@@ -6,6 +6,7 @@ import {
   isValidEmail,
   PayPalApiError,
 } from '../src/paypal.ts';
+import { receiptMeta } from '../src/adapter-types.ts';
 import { AdapterValidationError } from '../src/validate.ts';
 import type { PaymentIntent, Receipt, ReceiptStatus } from '../src/index.ts';
 
@@ -372,8 +373,8 @@ describe('idempotency', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
-    assert.equal(receipt.meta?.duplicateSenderBatchId, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.duplicateSenderBatchId, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -404,7 +405,7 @@ describe('idempotency', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, 'BATCH-DUP');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -437,7 +438,7 @@ describe('idempotency', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, 'BATCH-NET');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.ok(errors.length > 0);
   });
 });
@@ -473,7 +474,7 @@ describe('outcome rules on POST', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -545,7 +546,7 @@ describe('outcome rules on POST', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -570,7 +571,7 @@ describe('outcome rules on POST', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.ok(errors.length > 0);
   });
 
@@ -590,7 +591,7 @@ describe('outcome rules on POST', () => {
     const receipt = await adapter.pay(baseIntent());
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, '');
-    assert.equal(receipt.meta?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.ok(errors.length > 0);
   });
 });
@@ -619,7 +620,7 @@ describe('status()', () => {
     };
     const out = await adapter.status(input);
     assert.equal(out.status, 'succeeded');
-    assert.equal(out.meta?.payoutItemId, 'PI-99');
+    assert.equal(receiptMeta(out)?.payoutItemId, 'PI-99');
     assert.match(calls[1]?.url ?? '', /BATCH-ST/);
   });
 
@@ -676,6 +677,58 @@ describe('status()', () => {
       /another rail/,
     );
   });
+
+  it('succeeds from a plain core Receipt with no meta property', async () => {
+    const { fetchMock } = createFetchMock([
+      tokenRoute(),
+      {
+        method: 'GET',
+        path: '/v1/payments/payouts/B-NOMETA',
+        handler: () =>
+          jsonResponse({
+            batch_header: { payout_batch_id: 'B-NOMETA', batch_status: 'SUCCESS' },
+            items: [{ transaction_status: 'SUCCESS', payout_item_id: 'PI-NM' }],
+          }),
+      },
+    ]);
+    const adapter = createPayPalAdapter(adapterConfig(fetchMock));
+    const plain: Receipt = {
+      intentId: 'intent-plain',
+      rail: 'paypal',
+      externalId: 'B-NOMETA',
+      status: 'pending',
+      at: '2026-01-01T00:00:00.000Z',
+    };
+    assert.equal('meta' in plain, false);
+    const out = await adapter.status(plain);
+    assert.equal(out.status, 'succeeded');
+    assert.equal(out.externalId, 'B-NOMETA');
+    assert.equal(receiptMeta(out)?.payoutItemId, 'PI-NM');
+  });
+
+  it('failed item status from plain Receipt with no meta', async () => {
+    const { fetchMock } = createFetchMock([
+      tokenRoute(),
+      {
+        method: 'GET',
+        path: '/v1/payments/payouts/B-FAIL',
+        handler: () =>
+          jsonResponse({
+            batch_header: { payout_batch_id: 'B-FAIL', batch_status: 'SUCCESS' },
+            items: [{ transaction_status: 'FAILED' }],
+          }),
+      },
+    ]);
+    const adapter = createPayPalAdapter(adapterConfig(fetchMock));
+    const out = await adapter.status({
+      intentId: 'i-fail',
+      rail: 'paypal',
+      externalId: 'B-FAIL',
+      status: 'pending',
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    assert.equal(out.status, 'failed');
+  });
 });
 
 describe('meta', () => {
@@ -705,10 +758,10 @@ describe('meta', () => {
     ]);
     const adapter = createPayPalAdapter(adapterConfig(fetchMock));
     const receipt = await adapter.pay(baseIntent());
-    assert.equal(receipt.meta?.payoutItemId, 'ITEM-XYZ');
-    assert.equal(receipt.meta?.batchStatus, 'PENDING');
-    assert.equal(receipt.meta?.transactionStatus, 'PENDING');
-    for (const v of Object.values(receipt.meta ?? {})) {
+    assert.equal(receiptMeta(receipt)?.payoutItemId, 'ITEM-XYZ');
+    assert.equal(receiptMeta(receipt)?.batchStatus, 'PENDING');
+    assert.equal(receiptMeta(receipt)?.transactionStatus, 'PENDING');
+    for (const v of Object.values(receiptMeta(receipt) ?? {})) {
       assert.equal(typeof v, 'string');
     }
   });

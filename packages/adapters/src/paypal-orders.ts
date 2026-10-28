@@ -1,4 +1,5 @@
-import type { PaymentAdapter, PaymentIntent, Receipt, ReceiptStatus } from '@agent-pay/core';
+import type { PaymentIntent, ReceiptStatus } from '@agent-pay/core';
+import type { AdapterRail, RailReceipt } from './adapter-types.ts';
 import { validateIntent } from './validate.ts';
 import {
   createPayPalHttp,
@@ -54,14 +55,21 @@ function mapRefundStatus(status: string): ReceiptStatus {
   }
 }
 
-export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter {
+export interface PayPalOrdersAdapter {
+  readonly rail: 'paypal-orders';
+  pay(intent: PaymentIntent): Promise<RailReceipt<'paypal-orders'>>;
+  refund?(receipt: RailReceipt<'paypal-orders'>): Promise<RailReceipt<'paypal-orders'>>;
+}
+
+export function createPayPalOrdersAdapter(config: PayPalConfig): PayPalOrdersAdapter {
   const http = createPayPalHttp(config);
   const { nowMs, onError, apiCall } = http;
+  const rail = 'paypal-orders' as const satisfies AdapterRail;
 
   return {
-    rail: 'paypal',
+    rail,
 
-    async pay(intent: PaymentIntent): Promise<Receipt> {
+    async pay(intent: PaymentIntent): Promise<RailReceipt<'paypal-orders'>> {
       validateIntent(intent);
 
       const at = new Date(nowMs()).toISOString();
@@ -71,11 +79,11 @@ export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter 
         error: unknown,
         op: 'token' | 'create' | 'capture',
         externalId: string,
-      ): Receipt => {
+      ): RailReceipt<'paypal-orders'> => {
         onError?.(error, { intentId: intent.id, op });
         return {
           intentId: intent.id,
-          rail: 'paypal',
+          rail,
           externalId,
           status: 'failed',
           at,
@@ -86,11 +94,11 @@ export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter 
         error: unknown,
         op: 'create' | 'capture',
         externalId: string,
-      ): Receipt => {
+      ): RailReceipt<'paypal-orders'> => {
         onError?.(error, { intentId: intent.id, op });
         return {
           intentId: intent.id,
-          rail: 'paypal',
+          rail,
           externalId,
           status: 'pending',
           at,
@@ -197,15 +205,15 @@ export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter 
 
       return {
         intentId: intent.id,
-        rail: 'paypal',
+        rail,
         externalId: capture.id,
         status: mapCaptureStatus(capture.status),
         at,
       };
     },
 
-    async refund(receipt: Receipt): Promise<Receipt> {
-      if (receipt.rail !== 'paypal') {
+    async refund(receipt: RailReceipt<'paypal-orders'>): Promise<RailReceipt<'paypal-orders'>> {
+      if (receipt.rail !== 'paypal-orders') {
         throw new Error('Cannot refund a receipt from another rail');
       }
       if (receipt.status !== 'succeeded') {
@@ -229,7 +237,7 @@ export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter 
         onError?.(error, { intentId: receipt.intentId, op: 'refund' });
         return {
           intentId: receipt.intentId,
-          rail: 'paypal',
+          rail,
           externalId: receipt.externalId,
           status: 'failed',
           at,
@@ -243,7 +251,7 @@ export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter 
         });
         return {
           intentId: receipt.intentId,
-          rail: 'paypal',
+          rail,
           externalId: receipt.externalId,
           status: 'failed',
           at,
@@ -257,7 +265,7 @@ export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter 
         onError?.(error, { intentId: receipt.intentId, op: 'refund' });
         return {
           intentId: receipt.intentId,
-          rail: 'paypal',
+          rail,
           externalId: receipt.externalId,
           status: 'failed',
           at,
@@ -266,7 +274,7 @@ export function createPayPalOrdersAdapter(config: PayPalConfig): PaymentAdapter 
 
       return {
         intentId: receipt.intentId,
-        rail: 'paypal',
+        rail,
         externalId: refundBody.id,
         status: mapRefundStatus(refundBody.status),
         at,

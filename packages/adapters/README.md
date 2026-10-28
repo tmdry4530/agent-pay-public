@@ -12,7 +12,7 @@ Adapter-only types in `adapter-types.ts` extend receipts with optional string `m
 |--------|--------|------|---------|
 | `createMockAdapter` | `mock.ts` | `mock` | Deterministic, idempotent fake payments for local demos and tests. |
 | `createPayPalAdapter` | `paypal.ts` | `paypal` | PayPal Payouts v1: OAuth, create payout batch to an email payee, optional `status()` refresh. |
-| `createPayPalOrdersAdapter` | `paypal-orders.ts` | `paypal` | PayPal Orders v2: OAuth, create order, capture, refund captures (not used by the default demo). |
+| `createPayPalOrdersAdapter` | `paypal-orders.ts` | `paypal-orders` | PayPal Orders v2: OAuth, create order, capture, refund captures (**not** a core `PaymentAdapter`; rail widened in `adapter-types.ts` as `AdapterRail`. Not usable with core `runPayment` until core's `Rail` includes `paypal-orders`). |
 
 Shared PayPal HTTP plumbing (OAuth token cache, errors, `formatAmount`, env config) lives in `paypal-client.ts`.
 
@@ -87,7 +87,9 @@ String keys only (never secrets):
 
 ## PayPal Orders module (`paypal-orders`)
 
-Same `rail: 'paypal'` but Orders v2 semantics: `externalId` is capture id when known. Unknown outcomes on create/capture (5xx/network) resolve as **`pending`** (with order id on capture when known); 4xx → **`failed`**. `onError` ops: `create`, `capture`, `refund`, `token`.
+Uses adapter rail **`paypal-orders`** (widened on the adapter side via `AdapterRail`; core `Rail` remains `mock` | `paypal` | `near`). This module is intentionally **not** registered in the API adapter registry and is not a core `PaymentAdapter`. Receipts use `rail: 'paypal-orders'`. Refund rejects receipts whose rail is not `paypal-orders`.
+
+Same OAuth plumbing as Payouts but Orders v2 semantics: `externalId` is capture id when known. Unknown outcomes on create/capture (5xx/network) resolve as **`pending`** (with order id on capture when known); 4xx → **`failed`**. `onError` ops: `create`, `capture`, `refund`, `token`.
 
 ## Receipt status (general)
 

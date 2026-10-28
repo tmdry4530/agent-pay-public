@@ -24,7 +24,7 @@ test(
 
     const receipt = await adapter.pay(intent);
     assert.equal(receipt.intentId, intent.id);
-    assert.equal(receipt.rail, 'paypal');
+    assert.equal(receipt.rail, 'paypal-orders');
     assert.ok(receipt.status === 'failed' || receipt.status === 'succeeded' || receipt.status === 'pending');
 
     if (receipt.status === 'succeeded') {

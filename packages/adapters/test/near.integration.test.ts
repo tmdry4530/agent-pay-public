@@ -5,6 +5,7 @@ import {
   createNearRpcClient,
   nearConfigFromEnv,
   type ReceiptStatus,
+  receiptMeta,
 } from '../src/index.ts';
 
 const missingEnv =
@@ -38,8 +39,8 @@ describe(
       assert.equal(receipt.rail, 'near');
       assert.ok(ALLOWED.has(receipt.status));
       assert.equal(adapter.refund, undefined);
-      assert.equal(receipt.meta?.receiverId, receiverId);
-      assert.equal(receipt.meta?.network, config.networkId);
+      assert.equal(receiptMeta(receipt)?.receiverId, receiverId);
+      assert.equal(receiptMeta(receipt)?.network, config.networkId);
       assert.equal(typeof adapter.status, 'function');
       if (!adapter.status) {
         throw new Error('expected status()');

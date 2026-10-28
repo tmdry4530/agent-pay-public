@@ -81,7 +81,6 @@ export function createNearAdapter(opts: NearAdapterOptions): StatusCapableAdapte
       if (result.kind === 'notFound') {
         return receiptIn;
       }
-      const prior = receiptIn as AdapterReceipt;
       const updated: AdapterReceipt = {
         intentId: receiptIn.intentId,
         rail: 'near',
@@ -89,8 +88,9 @@ export function createNearAdapter(opts: NearAdapterOptions): StatusCapableAdapte
         status: result.success ? 'succeeded' : 'failed',
         at: now().toISOString(),
       };
-      if (prior.meta) {
-        updated.meta = { ...prior.meta };
+      const priorMeta = (receiptIn as AdapterReceipt).meta;
+      if (priorMeta) {
+        updated.meta = { ...priorMeta };
       }
       return updated;
     },

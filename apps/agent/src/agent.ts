@@ -1,5 +1,5 @@
 import type { LedgerEntry, PaymentResult, Receipt } from '@agent-pay/core';
-import { ApiClientError, getLedger, postApprove, postIntent, postRefresh } from './client.ts';
+import { ApiClientError, getLedger, getRail, postApprove, postIntent, postRefresh } from './client.ts';
 import { createPlanner, type Planner, type Quote } from './planner.ts';
 import { SCENARIOS, isScenarioName, type ScenarioName } from './scenarios.ts';
 
@@ -10,6 +10,7 @@ export type AgentFinalStatus = 'paid' | 'rejected' | 'approval_timeout' | 'faile
 export type AgentStep =
   | 'task'
   | 'quote'
+  | 'rail'
   | 'submit_intent'
   | 'intent_result'
   | 'await_approval'
@@ -244,13 +245,55 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
     quote,
   });
 
+  let payee = quote.payee;
+  let currency = quote.currency;
+  let amount = quote.amount;
+  try {
+    const railInfo = await getRail(options.apiUrl);
+    if (railInfo) {
+      const mappedPayee = railInfo.payees[quote.payee] ?? quote.payee;
+      payee = mappedPayee;
+      currency = railInfo.currency;
+      if (railInfo.amountScale !== 1) {
+        amount = Math.round(quote.amount * railInfo.amountScale * 1e6) / 1e6;
+      }
+      const mappingChanged =
+        mappedPayee !== quote.payee ||
+        currency.toUpperCase() !== quote.currency.toUpperCase() ||
+        amount !== quote.amount;
+      if (mappingChanged) {
+        step(
+          'rail',
+          `mapped payee ${quote.payee} → ${payee}, ${quote.amount} ${quote.currency} → ${amount} ${currency}`,
+          {
+            logicalPayee: quote.payee,
+            payee,
+            quoteAmount: quote.amount,
+            quoteCurrency: quote.currency,
+            amount,
+            currency,
+            amountScale: railInfo.amountScale,
+          },
+        );
+      }
+    }
+  } catch (err) {
+    return fail(err);
+  }
+
   // 2. Submit the intent.
   let created: Awaited<ReturnType<typeof postIntent>>;
   try {
     step('submit_intent', `POST ${options.apiUrl.replace(/\/+$/, '')}/intents as ${options.agentId}`, {
       agentId: options.agentId,
     });
-    created = await postIntent(options.apiUrl, { agentId: options.agentId, ...quote });
+    created = await postIntent(options.apiUrl, {
+      agentId: options.agentId,
+      payee,
+      amount,
+      currency,
+      purpose: quote.purpose,
+    });
   } catch (err) {
     return fail(err);
   }
