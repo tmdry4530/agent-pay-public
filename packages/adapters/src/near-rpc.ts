@@ -151,6 +151,14 @@ export function serializeTransferTransaction(input: TransferTransactionInput): U
   ]);
 }
 
+/**
+ * Default testnet RPC: FASTNEAR's public endpoint. NEAR's RPC providers page
+ * (https://docs.near.org/api/rpc/providers, checked 2026-10-28) lists it under Testnet as a public endpoint
+ * with a free tier and no API key in the URL; its free-tier limit is "Not published". Set NEAR_RPC_URL to override.
+ */
+export const NEAR_DEFAULT_TESTNET_RPC_URL = 'https://test.rpc.fastnear.com';
+export const NEAR_DEFAULT_MAINNET_RPC_URL = 'https://rpc.mainnet.near.org';
+
 export function nearConfigFromEnv(env: NodeJS.ProcessEnv = process.env): {
   rpcUrl: string;
   accountId: string;
@@ -171,7 +179,7 @@ export function nearConfigFromEnv(env: NodeJS.ProcessEnv = process.env): {
   }
   const rpcUrl =
     env.NEAR_RPC_URL?.trim() ||
-    (networkRaw === 'mainnet' ? 'https://rpc.mainnet.near.org' : 'https://rpc.testnet.near.org');
+    (networkRaw === 'mainnet' ? NEAR_DEFAULT_MAINNET_RPC_URL : NEAR_DEFAULT_TESTNET_RPC_URL);
   return { rpcUrl, accountId, privateKey, networkId: networkRaw };
 }
 

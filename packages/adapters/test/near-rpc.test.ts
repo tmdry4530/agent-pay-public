@@ -431,4 +431,18 @@ describe('createNearRpcClient', () => {
       /NEAR_PRIVATE_KEY/,
     );
   });
+
+  it('defaults testnet RPC to the FASTNEAR public endpoint; NEAR_RPC_URL overrides it', () => {
+    // Placeholder text only: nearConfigFromEnv checks presence, not key format.
+    const base = { NEAR_ACCOUNT_ID: 'alice.testnet', NEAR_PRIVATE_KEY: 'placeholder' };
+    assert.equal(nearConfigFromEnv(base as NodeJS.ProcessEnv).rpcUrl, 'https://test.rpc.fastnear.com');
+    assert.equal(
+      nearConfigFromEnv({ ...base, NEAR_NETWORK: 'testnet', NEAR_RPC_URL: '  ' } as NodeJS.ProcessEnv).rpcUrl,
+      'https://test.rpc.fastnear.com',
+    );
+    assert.equal(
+      nearConfigFromEnv({ ...base, NEAR_RPC_URL: 'http://127.0.0.1:9' } as NodeJS.ProcessEnv).rpcUrl,
+      'http://127.0.0.1:9',
+    );
+  });
 });
