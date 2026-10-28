@@ -187,7 +187,7 @@ Examples: `alice.testnet` is payable on testnet; `alice.near` is not. `Alice.tes
 | `NEAR_ACCOUNT_ID` | Yes | Signer account id |
 | `NEAR_PRIVATE_KEY` | Yes | `ed25519:` + base58 secret (64-byte seed\|\|pubkey, or 32-byte seed). Never log it. |
 | `NEAR_NETWORK` | No | `testnet` (default) or `mainnet` |
-| `NEAR_RPC_URL` | No | Default `https://rpc.testnet.near.org` or `https://rpc.mainnet.near.org` |
+| `NEAR_RPC_URL` | No | Testnet default `https://test.rpc.fastnear.com` (FASTNEAR's public, free, no-API-key testnet endpoint on NEAR's [RPC providers](https://docs.near.org/api/rpc/providers) page); mainnet default `https://rpc.mainnet.near.org` |
 
 `nearConfigFromEnv()` reads these. `NEAR_RECEIVER_ID` is only used by the optional integration test.
 

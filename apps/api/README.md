@@ -1,7 +1,8 @@
 # @agent-pay/api
 
 `node:http` server, no runtime deps. `createApp(options)` / `createServer(options)` are exported from
-`apps/api/src/index.ts` for tests; `src/main.ts` is the entrypoint (`npm start -w @agent-pay/api`).
+`apps/api/src/index.ts` for tests; `src/main.ts` is the entrypoint: `npm run api` from the repo root (loads the root `.env` only if it exists), or
+`npm start -w @agent-pay/api` (no `.env` loading).
 
 ## Env vars
 | var | default | |
@@ -11,11 +12,11 @@
 | `LEDGER_PATH` | `apps/api/.data/ledger.json` (resolved from the api package, gitignored) | single writer process per file |
 | `RAIL` | `mock` | `mock` \| `paypal` (PayPal Payouts v1, sandbox) \| `near` (NEAR testnet native transfer). Missing credentials for a wired rail → exits 1 at startup with `adapter_config: …` plus `missing required env vars for RAIL=<rail>: <names>` (names only, no values, no stack trace) |
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit) |
-| `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK?`, `NEAR_RPC_URL?` | | only for `RAIL=near` |
+| `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK?`, `NEAR_RPC_URL?` | | only for `RAIL=near`; `NEAR_RPC_URL` defaults to `https://test.rpc.fastnear.com` on testnet |
 | `DEMO_PAYEES` | | optional for `RAIL=paypal` or `near` only: comma-separated `name=address` pairs (whitespace trimmed). When non-empty, **replaces** the default logical→address map entirely. Invalid syntax or payee for the rail → startup error `demo_payees: … (RAIL=…)`. Ignored for `mock`. |
 
-All names are listed in the root [.env.example](../../.env.example); `node --env-file=.env apps/api/src/main.ts`
-loads a filled-in copy. Startup errors are formatted by `src/startup-error.ts`: an error carrying a `missing` /
+All names are listed in the root [.env.example](../../.env.example); `npm run api` (root script:
+`node --env-file-if-exists=.env apps/api/src/main.ts`) loads a filled-in copy when one exists. Startup errors are formatted by `src/startup-error.ts`: an error carrying a `missing` /
 `missingEnv` / `names` string array is listed as-is; otherwise the rail's known required names (`REQUIRED_ENV`) or
 env names quoted in a "… is required" message are checked against the environment. Credential-like env values are
 scrubbed from the printed message. Listen errors (e.g. `EADDRINUSE`) also exit 1 without a stack trace.

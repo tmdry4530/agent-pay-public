@@ -89,12 +89,18 @@ Start the API (terminal 1). It listens on `http://127.0.0.1:8787` with the `mock
 `apps/api/.data/ledger.json` (gitignored); set `LEDGER_PATH` to start from an empty ledger:
 
 ```sh
-LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm start -w @agent-pay/api
+LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm run api
 # agent-pay api listening on http://127.0.0.1:8787 (rail=mock, ledger=/tmp/agent-pay-demo/ledger.json)
 ```
 
-To keep settings in a file instead, `cp .env.example .env` (gitignored; key names only, empty = default), fill it
-in, and run `node --env-file=.env apps/api/src/main.ts`.
+To keep settings in a file instead, `cp .env.example .env` (gitignored; key names only, empty = default) and fill
+it in. `npm run api` loads the root `.env` when it exists; without one, Node prints `.env not found. Continuing
+without it.` and the defaults apply.
+
+`npm run demo` starts the API and the web UI together on a fresh ledger (ports `DEMO_API_PORT`, default 8787, and
+`DEMO_WEB_PORT`, default 5173). Its rail comes from the shell, default `mock` (`RAIL=near npm run demo`); a root
+`.env` is passed to the API when present. If the API cannot start (for example missing credentials), the demo
+prints the API's names-only message, stops what it started, and exits 1.
 
 Run the three scenarios (terminal 2):
 
@@ -210,7 +216,7 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
   | `LEDGER_PATH` | `apps/api/.data/ledger.json` | Ledger file; one writer process per file |
   | `RAIL` | `mock` | `mock`, `paypal` (Payouts v1 sandbox) or `near` (NEAR testnet native transfer) |
   | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL` | | Only for `RAIL=paypal` (sandbox) |
-  | `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK`, `NEAR_RPC_URL` | | Only for `RAIL=near` (`NEAR_NETWORK` defaults to `testnet`) |
+  | `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK`, `NEAR_RPC_URL` | | Only for `RAIL=near` (`NEAR_NETWORK` defaults to `testnet`, `NEAR_RPC_URL` to `https://test.rpc.fastnear.com`) |
   | `DEMO_PAYEES` | | Optional for `paypal` / `near`: `name=address,...` replaces the default payee map |
 
   All names are in [.env.example](.env.example). With `RAIL=paypal` or `RAIL=near` and a required var unset, the API exits 1 and
