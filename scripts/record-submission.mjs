@@ -12,6 +12,7 @@ const videoScriptPath = path.join(repoRoot, 'docs', 'submission', 'video-script.
 
 const DEFAULT_API = 'http://127.0.0.1:8787';
 const TOTAL_SECONDS = 170;
+const WEB_ZOOM = Number(process.env.WEB_ZOOM ?? '0.8');
 const SECRET_RE = /(secret|api[_-]?key|token\b|password|Bearer )/i;
 
 /** @type {import('playwright').ChromiumBrowser | null} */
@@ -23,6 +24,8 @@ const pageErrors = [];
 const consoleErrors = [];
 /** @type {ReturnType<typeof setTimeout>[]} */
 const captionTimers = [];
+/** @type {{ tag: string; testId: string; elTop: number; elBottom: number; captionTop: number; captionBottom: number; overlap: boolean; fullyVisible: boolean }[]} */
+const captionOverlapChecks = [];
 
 let t0 = 0;
 let signalExitCode = null;
@@ -275,18 +278,164 @@ async function pause(page, ms) {
   }
 }
 
+async function scrollToTop(page) {
+  await page.evaluate(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  });
+}
+
+async function scrollForGaugeHighlight(page) {
+  await page.evaluate(() => {
+    const gauge = document.querySelector('[data-testid="gauge"]');
+    const decision = document.querySelector('[data-testid="decision"]');
+    const box = document.querySelector('#submission-caption .submission-caption__box');
+    const captionTop = box
+      ? box.getBoundingClientRect().top
+      : window.innerHeight - 140;
+    const gap = 16;
+    const targetDecisionBottom = captionTop - gap;
+
+    const maxScroll = Math.max(
+      0,
+      document.documentElement.scrollHeight - window.innerHeight,
+    );
+
+    const metricsAt = (scrollY) => {
+      window.scrollTo({ top: scrollY, behavior: 'instant' });
+      const gaugeRect = gauge?.getBoundingClientRect();
+      const decisionRect = decision?.getBoundingClientRect();
+      return {
+        scrollY,
+        gaugeTop: gaugeRect?.top ?? 0,
+        decisionTop: decisionRect?.top ?? 0,
+        decisionBottom: decisionRect?.bottom ?? 0,
+      };
+    };
+
+    const bothVisible = (m) =>
+      m.gaugeTop >= 0 &&
+      m.decisionTop >= 0 &&
+      m.decisionBottom <= targetDecisionBottom;
+
+    const decisionFullyVisible = (m) =>
+      m.decisionTop >= 0 && m.decisionBottom <= targetDecisionBottom;
+
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    if (!decision) return;
+
+    const atTop = metricsAt(0);
+    if (bothVisible(atTop)) return;
+
+    /** @type {number | null} */
+    let bestBoth = null;
+    /** @type {number | null} */
+    let bestDecision = null;
+    const step = Math.max(1, Math.floor(maxScroll / 400));
+    for (let y = 0; y <= maxScroll; y += step) {
+      const m = metricsAt(y);
+      if (bothVisible(m)) {
+        bestBoth = y;
+        break;
+      }
+      if (decisionFullyVisible(m) && bestDecision == null) bestDecision = y;
+    }
+    if (bestBoth != null) {
+      metricsAt(bestBoth);
+      return;
+    }
+    if (bestDecision != null) {
+      metricsAt(bestDecision);
+      return;
+    }
+    metricsAt(0);
+  });
+}
+
+async function scrollAboveCaption(page, testId) {
+  await page.evaluate((id) => {
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    if (!el) return;
+    const box = document.querySelector('#submission-caption .submission-caption__box');
+    const captionTop = box
+      ? box.getBoundingClientRect().top
+      : window.innerHeight - 140;
+    const gap = 16;
+    const minTop = 8;
+    const targetBottom = captionTop - gap;
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom > targetBottom) {
+      const scrollDown = rect.bottom - targetBottom;
+      const topAfter = rect.top - scrollDown;
+      if (topAfter < minTop) {
+        window.scrollBy({ top: rect.top - minTop, behavior: 'instant' });
+      } else {
+        window.scrollBy({ top: scrollDown, behavior: 'instant' });
+      }
+    }
+  }, testId);
+  await pause(page, 400);
+}
+
+async function assertNotUnderCaption(page, testId, tag) {
+  const metrics = await page.evaluate(
+    ({ id }) => {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      const box = document.querySelector('#submission-caption .submission-caption__box');
+      let captionTop;
+      let captionBottom;
+      if (box) {
+        const r = box.getBoundingClientRect();
+        captionTop = r.top;
+        captionBottom = r.bottom;
+      } else {
+        captionTop = window.innerHeight - 140;
+        captionBottom = window.innerHeight;
+      }
+      let elTop = 0;
+      let elBottom = 0;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        elTop = r.top;
+        elBottom = r.bottom;
+      }
+      const gap = 16;
+      const overlap = elBottom > captionTop && elTop < captionBottom;
+      const fullyVisible =
+        el != null && elTop >= 0 && elBottom <= captionTop - gap;
+      return { testId: id, elTop, elBottom, captionTop, captionBottom, overlap, fullyVisible };
+    },
+    { id: testId },
+  );
+  const check = { tag, ...metrics };
+  captionOverlapChecks.push(check);
+  if (check.overlap || check.elTop < 0) {
+    throw new Error(
+      `caption overlaps ${tag} [data-testid=${testId}]: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption ${check.captionTop.toFixed(1)}–${check.captionBottom.toFixed(1)}` +
+        (check.elTop < 0 ? ' (partially scrolled off top)' : ''),
+    );
+  }
+  return check;
+}
+
+async function refocusAboveCaption(page, testId, tag) {
+  await scrollAboveCaption(page, testId);
+  await assertNotUnderCaption(page, testId, tag);
+}
+
 function stripMarkdownBackticks(title) {
   return title.replace(/`/g, '');
 }
 
 async function ensureWebCaptionPadding(page) {
-  await page.evaluate(() => {
-    if (document.getElementById('submission-caption-padding')) return;
-    const style = document.createElement('style');
-    style.id = 'submission-caption-padding';
-    style.textContent = 'body { padding-bottom: 170px !important; }';
-    document.head.appendChild(style);
-  });
+  await page.evaluate((zoom) => {
+    if (!document.getElementById('submission-caption-padding')) {
+      const style = document.createElement('style');
+      style.id = 'submission-caption-padding';
+      style.textContent = 'body { padding-bottom: 170px !important; }';
+      document.head.appendChild(style);
+    }
+    document.documentElement.style.zoom = String(zoom);
+  }, WEB_ZOOM);
 }
 
 async function setCaption(page, sceneLabel, text) {
@@ -394,11 +543,6 @@ async function highlight(page, testId) {
     el.style.outlineOffset = '4px';
     el.style.borderRadius = '12px';
     el.setAttribute('data-demo-hl', '');
-    el.scrollIntoView({ block: 'center', behavior: 'instant' });
-    const captionRegionTop = 800 - 150;
-    if (el.getBoundingClientRect().bottom > captionRegionTop) {
-      window.scrollBy(0, 60);
-    }
   }, testId);
 }
 
@@ -498,7 +642,7 @@ function escapeHtml(s) {
 }
 
 function agentCliCommand(apiUrl) {
-  let cmd = 'npm run -s agent -w @agent-pay/agent -- --scenario small --json';
+  let cmd = 'npm run -s agent -- --scenario small --json';
   if (apiUrl !== DEFAULT_API) {
     cmd += ` --api ${apiUrl}`;
   }
@@ -510,8 +654,6 @@ function runAgentCli(apiUrl) {
     'run',
     '-s',
     'agent',
-    '-w',
-    '@agent-pay/agent',
     '--',
     '--scenario',
     'small',
@@ -796,62 +938,96 @@ try {
 
   // Scene 2 — $12 paid
   await runScene(2, async (_scene, scheduleCaptions) => {
+    await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
     await clickScenarioFlow(page, 'scenario-approved');
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene2-decision');
     await pause(page, 2200);
+    await refocusAboveCaption(page, 'decision', 'scene2-decision-after-pause');
     await page.getByTestId('receipt').waitFor({ state: 'visible' });
+    await scrollAboveCaption(page, 'receipt');
     await highlight(page, 'receipt');
+    await assertNotUnderCaption(page, 'receipt', 'scene2-receipt');
     await pause(page, 2200);
+    await refocusAboveCaption(page, 'receipt', 'scene2-receipt-after-pause');
+    await scrollForGaugeHighlight(page);
     await highlight(page, 'gauge');
+    await assertNotUnderCaption(page, 'decision', 'scene2-decision-during-gauge');
     await pause(page, 2000);
+    await assertNotUnderCaption(page, 'decision', 'scene2-decision-during-gauge-after-pause');
   });
 
   // Scene 3 — rejected
   await runScene(3, async (_scene, scheduleCaptions) => {
+    await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
     await clickScenarioFlow(page, 'scenario-rejected');
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene3-decision');
     await pause(page, 2800);
+    await refocusAboveCaption(page, 'decision', 'scene3-decision-after-pause');
+    await scrollForGaugeHighlight(page);
     await highlight(page, 'gauge');
+    await assertNotUnderCaption(page, 'decision', 'scene3-decision-during-gauge');
     await pause(page, 2000);
+    await assertNotUnderCaption(page, 'decision', 'scene3-decision-during-gauge-after-pause');
   });
 
   // Scene 4 — needs approval
   await runScene(4, async (_scene, scheduleCaptions) => {
+    await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
     await clickScenarioFlow(page, 'scenario-needs-approval');
     await highlightSelector(page, 'ol.stepper');
     await pause(page, 2200);
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene4-decision');
     await pause(page, 2200);
+    await refocusAboveCaption(page, 'decision', 'scene4-decision-after-pause');
+    await scrollAboveCaption(page, 'btn-approve');
     await highlight(page, 'btn-approve');
     await pause(page, 2000);
   });
 
   // Scene 5 — approved
   await runScene(5, async (_scene, scheduleCaptions) => {
+    await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
     await page.getByTestId('btn-approve').click();
     await pause(page, 1800);
     await page.getByTestId('human-outcome').waitFor({ state: 'visible' });
+    await scrollAboveCaption(page, 'decision');
     await highlight(page, 'decision');
+    await assertNotUnderCaption(page, 'decision', 'scene5-decision');
     await pause(page, 1800);
+    await refocusAboveCaption(page, 'decision', 'scene5-decision-after-pause');
     await page.getByTestId('receipt').waitFor({ state: 'visible' });
+    await scrollAboveCaption(page, 'receipt');
     await highlight(page, 'receipt');
+    await assertNotUnderCaption(page, 'receipt', 'scene5-receipt');
     await pause(page, 1800);
+    await refocusAboveCaption(page, 'receipt', 'scene5-receipt-after-pause');
+    await scrollForGaugeHighlight(page);
     await highlight(page, 'gauge');
+    await assertNotUnderCaption(page, 'decision', 'scene5-decision-during-gauge');
     await pause(page, 1500);
+    await assertNotUnderCaption(page, 'decision', 'scene5-decision-during-gauge-after-pause');
   });
 
   // Scene 6 — ledger zoom
   await runScene(6, async (_scene, scheduleCaptions) => {
+    await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
+    await scrollToTop(page);
     await highlight(page, 'ledger');
     await pause(page, 800);
     await startLedgerZoom(page);
@@ -930,7 +1106,10 @@ try {
   browser = null;
 
   const timingPath = path.join(os.tmpdir(), 'agent-pay-submission-timing.json');
-  fs.writeFileSync(timingPath, `${JSON.stringify({ t0, scenes: timingLog }, null, 2)}\n`);
+  fs.writeFileSync(
+    timingPath,
+    `${JSON.stringify({ t0, scenes: timingLog, captionOverlapChecks }, null, 2)}\n`,
+  );
 
   for (const row of timingLog) {
     console.log(
