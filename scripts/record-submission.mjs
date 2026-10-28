@@ -288,6 +288,9 @@ async function scrollForGaugeHighlight(page) {
   await page.evaluate(() => {
     const gauge = document.querySelector('[data-testid="gauge"]');
     const decision = document.querySelector('[data-testid="decision"]');
+    // The Receipt card (when shown) sits below Decision; keep it fully clear of the caption too.
+    const receipt = document.querySelector('[data-testid="receipt"]');
+    const lowest = receipt ?? decision;
     const box = document.querySelector('#submission-caption .submission-caption__box');
     const captionTop = box
       ? box.getBoundingClientRect().top
@@ -304,11 +307,12 @@ async function scrollForGaugeHighlight(page) {
       window.scrollTo({ top: scrollY, behavior: 'instant' });
       const gaugeRect = gauge?.getBoundingClientRect();
       const decisionRect = decision?.getBoundingClientRect();
+      const lowestRect = lowest?.getBoundingClientRect();
       return {
         scrollY,
         gaugeTop: gaugeRect?.top ?? 0,
         decisionTop: decisionRect?.top ?? 0,
-        decisionBottom: decisionRect?.bottom ?? 0,
+        decisionBottom: lowestRect?.bottom ?? 0,
       };
     };
 
@@ -359,7 +363,7 @@ async function scrollAboveCaption(page, testId) {
     const captionTop = box
       ? box.getBoundingClientRect().top
       : window.innerHeight - 140;
-    const gap = 16;
+    const gap = 24; // a little above the 16px assert gap: the caption box can grow by a line mid-scene
     const minTop = 8;
     const targetBottom = captionTop - gap;
     const rect = el.getBoundingClientRect();
@@ -376,7 +380,9 @@ async function scrollAboveCaption(page, testId) {
   await pause(page, 400);
 }
 
-async function assertNotUnderCaption(page, testId, tag) {
+const FULL = { requireFullyVisible: true };
+
+async function assertNotUnderCaption(page, testId, tag, { requireFullyVisible = false } = {}) {
   const metrics = await page.evaluate(
     ({ id }) => {
       const el = document.querySelector(`[data-testid="${id}"]`);
@@ -406,8 +412,13 @@ async function assertNotUnderCaption(page, testId, tag) {
     },
     { id: testId },
   );
-  const check = { tag, ...metrics };
+  const check = { tag, requireFullyVisible, ...metrics };
   captionOverlapChecks.push(check);
+  if (requireFullyVisible && !check.fullyVisible) {
+    throw new Error(
+      `${tag} [data-testid=${testId}] not fully visible above caption: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption top ${check.captionTop.toFixed(1)} (needs ${16}px gap)`,
+    );
+  }
   if (check.overlap || check.elTop < 0) {
     throw new Error(
       `caption overlaps ${tag} [data-testid=${testId}]: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption ${check.captionTop.toFixed(1)}–${check.captionBottom.toFixed(1)}` +
@@ -417,9 +428,9 @@ async function assertNotUnderCaption(page, testId, tag) {
   return check;
 }
 
-async function refocusAboveCaption(page, testId, tag) {
+async function refocusAboveCaption(page, testId, tag, opts) {
   await scrollAboveCaption(page, testId);
-  await assertNotUnderCaption(page, testId, tag);
+  await assertNotUnderCaption(page, testId, tag, opts);
 }
 
 function stripMarkdownBackticks(title) {
@@ -950,14 +961,16 @@ try {
     await page.getByTestId('receipt').waitFor({ state: 'visible' });
     await scrollAboveCaption(page, 'receipt');
     await highlight(page, 'receipt');
-    await assertNotUnderCaption(page, 'receipt', 'scene2-receipt');
+    await assertNotUnderCaption(page, 'receipt', 'scene2-receipt', FULL);
     await pause(page, 2200);
-    await refocusAboveCaption(page, 'receipt', 'scene2-receipt-after-pause');
+    await refocusAboveCaption(page, 'receipt', 'scene2-receipt-after-pause', FULL);
     await scrollForGaugeHighlight(page);
     await highlight(page, 'gauge');
     await assertNotUnderCaption(page, 'decision', 'scene2-decision-during-gauge');
+    await assertNotUnderCaption(page, 'receipt', 'scene2-receipt-during-gauge', FULL);
     await pause(page, 2000);
     await assertNotUnderCaption(page, 'decision', 'scene2-decision-during-gauge-after-pause');
+    await assertNotUnderCaption(page, 'receipt', 'scene2-receipt-during-gauge-after-pause', FULL);
   });
 
   // Scene 3 — rejected
@@ -1012,14 +1025,16 @@ try {
     await page.getByTestId('receipt').waitFor({ state: 'visible' });
     await scrollAboveCaption(page, 'receipt');
     await highlight(page, 'receipt');
-    await assertNotUnderCaption(page, 'receipt', 'scene5-receipt');
+    await assertNotUnderCaption(page, 'receipt', 'scene5-receipt', FULL);
     await pause(page, 1800);
-    await refocusAboveCaption(page, 'receipt', 'scene5-receipt-after-pause');
+    await refocusAboveCaption(page, 'receipt', 'scene5-receipt-after-pause', FULL);
     await scrollForGaugeHighlight(page);
     await highlight(page, 'gauge');
     await assertNotUnderCaption(page, 'decision', 'scene5-decision-during-gauge');
+    await assertNotUnderCaption(page, 'receipt', 'scene5-receipt-during-gauge', FULL);
     await pause(page, 1500);
     await assertNotUnderCaption(page, 'decision', 'scene5-decision-during-gauge-after-pause');
+    await assertNotUnderCaption(page, 'receipt', 'scene5-receipt-during-gauge-after-pause', FULL);
   });
 
   // Scene 6 — ledger zoom
