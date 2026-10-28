@@ -100,8 +100,8 @@ Owner checklist:
       testnet account ID and select **Request**.
       Docs: [Token Faucet](https://docs.near.org/getting-started/faucet).
       The demo sends 0.1 NEAR per `small` run and the integration test sends 0.001 NEAR, plus gas. Whether one
-      faucet request covers several runs *needs confirmation*: the docs say only "a small amount" and note
-      that the faucet may occasionally be empty.
+      faucet request covers several runs *needs confirmation*: the docs say only that it sends "a small amount",
+      and they note that the external Testnet Faucet "might be out of tokens at times".
 - [ ] **Get the account's private key.** If the account was made with the CLI, NEAR's docs give
       `near account export-account <name>.testnet` to export the seed phrase or private key. With a wallet, use
       the wallet's backup/export flow. How each wallet exports a raw private key (as opposed to a seed phrase)
@@ -123,7 +123,7 @@ Env names to fill:
 | `NEAR_ACCOUNT_ID` | Yes, for `RAIL=near` and the NEAR integration test | The sender account ID, a lowercase name ending in `.testnet` (2 to 64 characters; letters, digits, `-`, `_`, `.`) |
 | `NEAR_PRIVATE_KEY` | Yes, for `RAIL=near` and the NEAR integration test | The sender's ed25519 private key in NEAR's text form: the `ed25519` prefix, a colon, then base58 text (a 32-byte seed or a 64-byte secret key). The code checks that it matches the account's key pair. |
 | `NEAR_NETWORK` | No | `testnet` (default) or `mainnet`. Leave empty or set it to `testnet` |
-| `NEAR_RPC_URL` | No | Leave empty to use the default testnet RPC (`https://rpc.testnet.near.org`). To switch, pick a **testnet** endpoint from [RPC Providers](https://docs.near.org/api/rpc/providers); NEAR's own testnet RPC is listed there as "severely rate limited" |
+| `NEAR_RPC_URL` | No | Leave empty to use the code's default testnet RPC (`https://rpc.testnet.near.org`). To switch, use a **testnet** endpoint from [RPC Providers](https://docs.near.org/api/rpc/providers), for example FASTNEAR's public testnet endpoint listed there. The code's default endpoint is not in that table (NEAR's archival testnet endpoint is, marked "severely rate limited"), so its availability and limits *need confirmation* |
 | `NEAR_RECEIVER_ID` | Integration test only | The receiver account ID: a name ending in `.testnet` or a 64-character lowercase hex implicit account |
 | `DEMO_PAYEES` | No, but recommended for the demo | See [Demo payee map](#demo-payee-map-demo_payees) |
 
@@ -278,5 +278,7 @@ unknown value) exits 1 with `unknown_rail: RAIL must be one of mock|paypal|near`
    integration test (0.001 NEAR) and gas.
 4. How the chosen NEAR wallet exports a raw private key, as opposed to a seed phrase. The CLI export command is
    the documented route.
-5. Whether the default NEAR demo payee `demo-merchant.testnet` exists on testnet. Setting `DEMO_PAYEES` avoids
+5. Availability and rate limits of the code's default `NEAR_RPC_URL` (`https://rpc.testnet.near.org`), which
+   is not listed on NEAR's RPC providers page.
+6. Whether the default NEAR demo payee `demo-merchant.testnet` exists on testnet. Setting `DEMO_PAYEES` avoids
    the question.
