@@ -17,3 +17,14 @@ export {
   type PayPalConfig,
   type PayPalErrorCode,
 } from './paypal.ts';
+export { createNearAdapter, type NearAdapterOptions } from './near.ts';
+export {
+  createNearRpcClient,
+  nearConfigFromEnv,
+  type NearClient,
+  type NearSendResult,
+  type NearStatusResult,
+  type NearTransferRequest,
+} from './near-rpc.ts';
+export { parseNearToYocto, formatYoctoToNear } from './near-units.ts';
+export { isValidNearAccountId, isAcceptedPayee } from './near-account.ts';
