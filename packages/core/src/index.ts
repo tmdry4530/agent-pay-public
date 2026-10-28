@@ -15,3 +15,5 @@ export { Ledger, LedgerError, countsTowardDailyTotal, utcDay } from './ledger.ts
 export type { LedgerEntry, LedgerFile, LedgerOptions, PaymentStatus } from './ledger.ts';
 export { FailureCode, PaymentError, approve, reject, runPayment } from './orchestrator.ts';
 export type { ApproveOptions, PaymentErrorCode, PaymentResult, RejectOptions, RunStatus } from './orchestrator.ts';
+export { reconcile, refreshIntent } from './reconcile.ts';
+export type { ReconcileSummary, RefreshResult } from './reconcile.ts';

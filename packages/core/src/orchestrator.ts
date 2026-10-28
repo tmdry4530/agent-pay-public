@@ -41,7 +41,11 @@ export type PaymentErrorCode =
   | 'in_progress' // recorded but undecided, or approved with no payment recorded yet
   | 'intent_not_found'
   | 'not_pending' // approve/reject on an intent whose decision is not needs_approval
-  | 'already_paid';
+  | 'already_paid'
+  | 'no_receipt' // refreshIntent: no receipt stored on the entry
+  | 'receipt_not_pending' // refreshIntent: receipt already settled (succeeded/failed/refunded)
+  | 'status_unsupported' // refreshIntent: adapter has no status(), or receipt rail ≠ adapter rail
+  | 'status_check_failed'; // refreshIntent: status() threw or returned an invalid receipt; nothing stored
 
 /** Thrown for caller errors (bad state transitions). Payment failures are results, not throws. */
 export class PaymentError extends Error {

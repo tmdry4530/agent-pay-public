@@ -85,6 +85,22 @@ export async function postApprove(apiUrl: string, intentId: string, approver: st
   return (await assertOk(res)) as PaymentResult;
 }
 
+export async function postRefresh(apiUrl: string, intentId: string): Promise<PaymentResult & { changed: boolean }> {
+  let res: Response;
+  try {
+    res = await fetch(`${trimBase(apiUrl)}/intents/${encodeURIComponent(intentId)}/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new ApiClientError(`fetch_failed: ${detail}`);
+  }
+  return (await assertOk(res)) as PaymentResult & { changed: boolean };
+}
+
 export async function getLedger(apiUrl: string): Promise<LedgerResponse> {
   let res: Response;
   try {
