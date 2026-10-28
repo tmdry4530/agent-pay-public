@@ -1,9 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { AdapterValidationError } from '@agent-pay/adapters';
+import { base58Encode } from '@agent-pay/adapters';
+import type { StatusCapableAdapter } from '@agent-pay/adapters';
 import type { PaymentIntent, Rail } from '@agent-pay/core';
 import {
   AdapterConfigError,
@@ -39,9 +43,53 @@ test('parseRail("bogus") throws AdapterConfigError', () => {
   assert.throws(() => parseRail('bogus'), AdapterConfigError);
 });
 
-test('createAdapter rejects the unwired near rail', async () => {
-  const ctx = { env: {}, now: NOW };
-  await assert.rejects(createAdapter('near', ctx), /adapter_not_wired: near adapter not wired yet/);
+test('near is wired to packages/adapters and needs credentials from env', async () => {
+  await assert.rejects(createAdapter('near', { env: {}, now: NOW }), (err: unknown) => {
+    assert.ok(err instanceof AdapterConfigError);
+    assert.match(err.message, /^adapter_config: NEAR_ACCOUNT_ID environment variable is required/);
+    return true;
+  });
+
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const jwk = privateKey.export({ format: 'jwk' });
+  if (typeof jwk.d !== 'string' || typeof jwk.x !== 'string') {
+    throw new Error('expected ed25519 jwk material');
+  }
+  const seed = new Uint8Array(Buffer.from(jwk.d, 'base64url'));
+  const rawPub = new Uint8Array(Buffer.from(jwk.x, 'base64url'));
+  const material = new Uint8Array(seed.length + rawPub.length);
+  material.set(seed, 0);
+  material.set(rawPub, seed.length);
+  const nearPrivateKey = `ed25519:${base58Encode(material)}`;
+
+  const adapter = await createAdapter('near', {
+    env: {
+      NEAR_ACCOUNT_ID: 'agent.testnet',
+      NEAR_PRIVATE_KEY: nearPrivateKey,
+      NEAR_RPC_URL: 'http://127.0.0.1:9',
+    },
+    now: NOW,
+  });
+  assert.equal(adapter.rail, 'near');
+  assert.equal(typeof (adapter as StatusCapableAdapter).status, 'function');
+  assert.equal(adapter.refund, undefined);
+
+  const malformedKey = 'ed25519:!!!not-a-valid-near-private-key!!!';
+  await assert.rejects(
+    createAdapter('near', {
+      env: {
+        NEAR_ACCOUNT_ID: 'agent.testnet',
+        NEAR_PRIVATE_KEY: malformedKey,
+        NEAR_RPC_URL: 'http://127.0.0.1:9',
+      },
+      now: NOW,
+    }),
+    (err: unknown) => {
+      assert.ok(err instanceof AdapterConfigError);
+      assert.ok(!err.message.includes(malformedKey));
+      return true;
+    },
+  );
 });
 
 test('paypal is wired to packages/adapters and needs credentials from env', async () => {
@@ -56,6 +104,20 @@ test('paypal is wired to packages/adapters and needs credentials from env', asyn
     now: NOW,
   });
   assert.equal(adapter.rail, 'paypal');
+});
+
+test('paypal adapter is Payouts: status, no refund, email payee required', async () => {
+  const adapter = await createAdapter('paypal', {
+    env: {
+      PAYPAL_CLIENT_ID: 'test-id',
+      PAYPAL_CLIENT_SECRET: 'test-secret',
+      PAYPAL_BASE_URL: 'http://127.0.0.1:9',
+    },
+    now: NOW,
+  });
+  assert.equal(typeof (adapter as { status?: unknown }).status, 'function');
+  assert.equal(adapter.refund, undefined);
+  await assert.rejects(() => adapter.pay(intent()), (err: unknown) => err instanceof AdapterValidationError);
 });
 
 test('createAdapter("mock") pays with a succeeded receipt matching the intent', async () => {
@@ -102,9 +164,27 @@ test('createAdapter uses a custom registry plug-in for paypal', async () => {
 
 async function runMainExpectingFailure(env: Record<string, string>): Promise<string> {
   const mainPath = join(import.meta.dirname, '../src/main.ts');
-  const { PAYPAL_CLIENT_ID: _id, PAYPAL_CLIENT_SECRET: _secret, ...baseEnv } = process.env;
+  const {
+    PAYPAL_CLIENT_ID: _id,
+    PAYPAL_CLIENT_SECRET: _secret,
+    NEAR_ACCOUNT_ID: _nearAccount,
+    NEAR_PRIVATE_KEY: _nearKey,
+    NEAR_RPC_URL: _nearRpc,
+    NEAR_NETWORK: _nearNetwork,
+    NEAR_RECEIVER_ID: _nearReceiver,
+    ...baseEnv
+  } = process.env;
   try {
-    await execFileAsync(process.execPath, [mainPath], { env: { ...baseEnv, PORT: '0', ...env }, timeout: 10_000, encoding: 'utf8' });
+    await execFileAsync(process.execPath, [mainPath], {
+      env: {
+        ...baseEnv,
+        PORT: '0',
+        LEDGER_PATH: join(tmpdir(), 'agent-pay-unused', 'ledger.json'),
+        ...env,
+      },
+      timeout: 10_000,
+      encoding: 'utf8',
+    });
   } catch (err: unknown) {
     const e = err as { code?: number; stderr?: string };
     assert.equal(e.code, 1);
@@ -117,20 +197,8 @@ test('main entrypoint exits 1 for RAIL=paypal without credentials', async () => 
   assert.match(await runMainExpectingFailure({ RAIL: 'paypal' }), /PAYPAL_CLIENT_ID environment variable is required/);
 });
 
-test('main entrypoint exits 1 when RAIL=near is not wired', async () => {
-  const mainPath = join(import.meta.dirname, '../src/main.ts');
-  try {
-    await execFileAsync(process.execPath, [mainPath], {
-      env: { ...process.env, RAIL: 'near', PORT: '0', LEDGER_PATH: join(tmpdir(), 'agent-pay-unused', 'ledger.json') },
-      timeout: 10_000,
-      encoding: 'utf8',
-    });
-    assert.fail('expected main to exit with code 1');
-  } catch (err: unknown) {
-    const e = err as { code?: number; stderr?: string };
-    assert.equal(e.code, 1);
-    assert.match(e.stderr ?? '', /adapter not wired yet/);
-  }
+test('main entrypoint exits 1 for RAIL=near without NEAR env', async () => {
+  assert.match(await runMainExpectingFailure({ RAIL: 'near' }), /NEAR_ACCOUNT_ID environment variable is required/);
 });
 
 test('loadConfig defaults: port 8787, rail mock, ledger under apps/api/.data', () => {
