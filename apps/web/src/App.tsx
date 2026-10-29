@@ -954,7 +954,7 @@ export default function App({ clock = systemClock }: AppProps) {
                         {ev.kind === 'resolution' && ev.detail ? ` · ${ev.detail}` : ''}
                       </span>
                     )}
-                    {ev.kind === 'resolution' && ev.previousExternalId !== undefined && (
+                    {ev.kind === 'resolution' && ev.previousExternalId !== undefined && ev.previousExternalId !== '' && (
                       <span className="ledger-resolution wrap-anywhere" data-testid="ledger-resolution">
                         previous: {ev.previousExternalId}
                       </span>

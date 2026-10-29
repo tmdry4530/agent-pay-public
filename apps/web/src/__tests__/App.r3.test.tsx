@@ -149,6 +149,43 @@ describe('App r3 resolve and race banners', () => {
     expect(screen.getByTestId('result-status')).toHaveTextContent('failed');
   });
 
+  it.each([
+    ['', false],
+    ['rail-old-1', true],
+  ] as const)('resolution timeline previous external id %j shown=%s', async (previous, shown) => {
+    const inner = createInMemoryClient({
+      payOutcome: 'timeout',
+      payTimeoutMs: 50,
+      now: () => new Date('2026-03-01T12:00:00.000Z'),
+    });
+    const client: AgentPayClient = {
+      ...inner,
+      async getLedger() {
+        const ledger = await inner.getLedger();
+        return {
+          ...ledger,
+          entries: ledger.entries.map((e) =>
+            e.resolution ? { ...e, resolution: { ...e.resolution, previousExternalId: previous } } : e,
+          ),
+        };
+      },
+    };
+    const user = await runNeedsCheckScenario(client);
+    await user.click(screen.getByTestId('resolve-status-failed'));
+    await user.type(screen.getByTestId('resolve-note'), 'no charge on rail');
+    await user.type(screen.getByTestId('resolve-by'), 'ops-alice');
+    await user.click(screen.getByTestId('btn-resolve-submit'));
+    await screen.findByTestId('resolve-success');
+    const ledger = screen.getByTestId('ledger');
+    await waitFor(() => expect(within(ledger).getByText(/resolved failed/i)).toBeInTheDocument());
+    if (shown) {
+      expect(within(ledger).getByTestId('ledger-resolution')).toHaveTextContent('previous: rail-old-1');
+    } else {
+      expect(within(ledger).queryByTestId('ledger-resolution')).not.toBeInTheDocument();
+      expect(ledger).not.toHaveTextContent('previous:');
+    }
+  });
+
   it('resolve errors show alert and refresh ledger on already resolved', async () => {
     const inner = createInMemoryClient({
       payOutcome: 'timeout',
