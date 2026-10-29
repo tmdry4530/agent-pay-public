@@ -136,22 +136,41 @@ export class Ledger {
   ): Promise<LedgerEntry> {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
-      if (entry.paymentStatus !== undefined) {
-        throw new LedgerError(`intent ${intentId} already has a payment; decision is final`);
-      }
-      if (options.ifStatus !== undefined && entry.decision?.status !== options.ifStatus) {
-        throw new LedgerError(
-          `intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${options.ifStatus}`,
-        );
-      }
-      const at = this.#now().toISOString();
-      entry.decision = { status: decision.status, reason: decision.reason };
-      const record: DecisionRecord = { ...entry.decision, at };
-      if (options.actor !== undefined) record.actor = options.actor;
-      (entry.decisions ??= []).push(record);
-      entry.updatedAt = at;
+      assertDecidable(entry, options.ifStatus);
+      this.#applyDecision(entry, decision, options.actor);
       return entry;
     });
+  }
+
+  /**
+   * Atomic evaluate-and-record: inside ONE serialized read-modify-write, computes the
+   * LedgerState for the entry's intent (same rules as ledgerStateFor), calls `decide`
+   * with it and records the returned decision (same guards as recordDecision, incl.
+   * `options.ifStatus`). No other write on this ledger can interleave between reading
+   * the daily total and recording the decision, so concurrent intents cannot jointly
+   * exceed the daily limit. If `decide` throws, nothing is written.
+   */
+  decide(
+    intentId: string,
+    decide: (state: LedgerState, entry: LedgerEntry) => { decision: Decision; actor?: string },
+    options: { ifStatus?: DecisionStatus } = {},
+  ): Promise<LedgerEntry> {
+    return this.#mutate((file) => {
+      const entry = find(file, intentId);
+      assertDecidable(entry, options.ifStatus);
+      const { decision, actor } = decide(stateFor(file, entry.intent), structuredClone(entry));
+      this.#applyDecision(entry, decision, actor);
+      return entry;
+    });
+  }
+
+  #applyDecision(entry: LedgerEntry, decision: Decision, actor: string | undefined): void {
+    const at = this.#now().toISOString();
+    entry.decision = { status: decision.status, reason: decision.reason };
+    const record: DecisionRecord = { ...entry.decision, at };
+    if (actor !== undefined) record.actor = actor;
+    (entry.decisions ??= []).push(record);
+    entry.updatedAt = at;
   }
 
   /** Records the payment outcome. Requires an 'approved' decision and no prior payment. */
@@ -245,20 +264,7 @@ export class Ledger {
    * of intent.createdAt, excluding the intent itself if already recorded.
    */
   async ledgerStateFor(intent: PaymentIntent): Promise<LedgerState> {
-    const day = utcDay(intent.createdAt);
-    const file = await this.load();
-    let total = 0;
-    for (const e of file.entries) {
-      if (
-        e.intent.id !== intent.id &&
-        e.intent.agentId === intent.agentId &&
-        utcDay(e.intent.createdAt) === day &&
-        countsTowardDailyTotal(e)
-      ) {
-        total += e.intent.amount;
-      }
-    }
-    return { dailyTotal: total };
+    return stateFor(await this.load(), intent);
   }
 
   #serialize<T>(fn: () => Promise<T>): Promise<T> {
@@ -309,6 +315,32 @@ export class Ledger {
       throw err;
     }
   }
+}
+
+function assertDecidable(entry: LedgerEntry, ifStatus: DecisionStatus | undefined): void {
+  const intentId = entry.intent.id;
+  if (entry.paymentStatus !== undefined) {
+    throw new LedgerError(`intent ${intentId} already has a payment; decision is final`);
+  }
+  if (ifStatus !== undefined && entry.decision?.status !== ifStatus) {
+    throw new LedgerError(`intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${ifStatus}`);
+  }
+}
+
+function stateFor(file: LedgerFile, intent: PaymentIntent): LedgerState {
+  const day = utcDay(intent.createdAt);
+  let total = 0;
+  for (const e of file.entries) {
+    if (
+      e.intent.id !== intent.id &&
+      e.intent.agentId === intent.agentId &&
+      utcDay(e.intent.createdAt) === day &&
+      countsTowardDailyTotal(e)
+    ) {
+      total += e.intent.amount;
+    }
+  }
+  return { dailyTotal: total };
 }
 
 function find(file: LedgerFile, intentId: string): LedgerEntry {

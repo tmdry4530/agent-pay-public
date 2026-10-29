@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { PaymentAdapter } from './adapter.ts';
 import type { Ledger, LedgerEntry } from './ledger.ts';
 import { ReasonCode, evaluate } from './policy.ts';
-import type { Decision, PaymentIntent, Policy, Receipt } from './types.ts';
+import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Policy, Receipt } from './types.ts';
 
 export type RunStatus = 'paid' | 'rejected' | 'needs_approval' | 'failed';
 
@@ -105,8 +105,8 @@ export async function runPayment(
     if (raced) return replay(raced, intent);
     throw err;
   }
-  const decision = evaluate(policy, intent, await ledger.ledgerStateFor(intent));
-  await ledger.recordDecision(intent.id, decision, { actor: POLICY_ACTOR });
+  const decide = (state: LedgerState) => ({ decision: evaluate(policy, intent, state), actor: POLICY_ACTOR });
+  const decision = await decideAtomically(ledger, intent.id, decide);
   if (decision.status !== 'approved') {
     return { intentId: intent.id, status: decision.status, decision };
   }
@@ -128,25 +128,65 @@ export async function approve(intentId: string, options: ApproveOptions): Promis
   const { policy, ledger, adapter, approver } = options;
   const entry = await pendingEntry(ledger, intentId);
   const by = approver === undefined ? 'a human' : `"${approver}"`;
-  const recheck = evaluate(
-    { ...policy, requireApprovalAbove: Number.POSITIVE_INFINITY },
-    entry.intent,
-    await ledger.ledgerStateFor(entry.intent),
-  );
-  if (recheck.status !== 'approved') {
-    const decision: Decision = { status: 'rejected', reason: `${recheck.reason} (re-checked on approval by ${by})` };
-    // The policy re-check made this decision; the reason names who triggered it.
-    await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval', actor: POLICY_ACTOR });
-    return { intentId, status: 'rejected', decision };
-  }
   const { amount, currency, payee } = entry.intent;
-  const decision: Decision = {
-    status: 'approved',
-    reason: `${ReasonCode.ApprovedByHuman}: approved by ${by}; ${amount} ${currency} to "${payee}" is within hard limits`,
+  const decide = (state: LedgerState): { decision: Decision; actor?: string } => {
+    const recheck = evaluate({ ...policy, requireApprovalAbove: Number.POSITIVE_INFINITY }, entry.intent, state);
+    if (recheck.status !== 'approved') {
+      // The policy re-check made this decision; the reason names who triggered it.
+      return {
+        decision: { status: 'rejected', reason: `${recheck.reason} (re-checked on approval by ${by})` },
+        actor: POLICY_ACTOR,
+      };
+    }
+    return {
+      decision: {
+        status: 'approved',
+        reason: `${ReasonCode.ApprovedByHuman}: approved by ${by}; ${amount} ${currency} to "${payee}" is within hard limits`,
+      },
+      actor: approver,
+    };
   };
-  // ifStatus guards against two concurrent approvals both paying.
-  await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval', actor: approver });
+  // ifStatus guards against two concurrent approvals both paying; the re-check and the
+  // decision are one atomic step so concurrent approvals cannot exceed the daily limit.
+  const decision = await decideAtomically(ledger, intentId, decide, 'needs_approval');
+  if (decision.status !== 'approved') return { intentId, status: 'rejected', decision };
   return payApproved(entry.intent, decision, ledger, adapter);
+}
+
+type DecideFn = (state: LedgerState) => { decision: Decision; actor?: string };
+
+/** Per-ledger-object promise chain for ledgers without an atomic `decide` (see decideAtomically). */
+const decisionLocks = new WeakMap<object, Promise<unknown>>();
+
+/**
+ * Reads the daily total, evaluates and records the decision as one atomic step.
+ * Uses Ledger.decide (a single serialized read-modify-write) when the ledger has it.
+ * Ledgers that only implement the older duck-typed API (e.g. the web demo's in-memory
+ * ledger) get an in-process mutex around ledgerStateFor + recordDecision instead.
+ */
+async function decideAtomically(
+  ledger: Ledger,
+  intentId: string,
+  decide: DecideFn,
+  ifStatus?: DecisionStatus,
+): Promise<Decision> {
+  if (typeof ledger.decide === 'function') {
+    const entry = await ledger.decide(intentId, (state) => decide(state), ifStatus ? { ifStatus } : {});
+    return entry.decision!;
+  }
+  const prev = decisionLocks.get(ledger) ?? Promise.resolve();
+  const run = prev.then(async () => {
+    const entry = await ledger.get(intentId);
+    if (!entry) throw new PaymentError('intent_not_found', `intent ${intentId} is not recorded`);
+    const { decision, actor } = decide(await ledger.ledgerStateFor(entry.intent));
+    const opts: { ifStatus?: DecisionStatus; actor?: string } = {};
+    if (ifStatus !== undefined) opts.ifStatus = ifStatus;
+    if (actor !== undefined) opts.actor = actor;
+    await ledger.recordDecision(intentId, decision, opts);
+    return decision;
+  });
+  decisionLocks.set(ledger, run.catch(() => undefined));
+  return run;
 }
 
 /** Rejects a needs_approval intent. Same errors as approve. Never calls an adapter. */
