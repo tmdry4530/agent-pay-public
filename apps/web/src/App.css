@@ -10,12 +10,16 @@
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1.75rem;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .header__brand {
   display: flex;
   gap: 1rem;
   align-items: center;
+  min-width: 0;
+  flex: 1 1 12rem;
 }
 
 .logo-mark {
@@ -47,13 +51,18 @@
   align-items: center;
   padding: 0.35rem 0.65rem;
   border-radius: 999px;
-  border: 1px solid var(--warn);
-  color: var(--warn);
+  border: 1px solid var(--badge-warn);
+  color: var(--badge-warn);
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  white-space: nowrap;
+  white-space: normal;
+  max-width: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mock-badge--inline {
@@ -65,6 +74,10 @@
   grid-template-columns: minmax(0, 280px) minmax(0, 1fr) minmax(0, 300px);
   gap: 1.25rem;
   align-items: start;
+}
+
+.layout > * {
+  min-width: 0;
 }
 
 .panel {
@@ -116,7 +129,7 @@
 }
 
 .scenario-card .amount {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -141,6 +154,9 @@
 .btn-primary {
   background: var(--accent);
   color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-success {
@@ -169,6 +185,8 @@
   gap: 0.2rem;
   overflow-x: auto;
   scrollbar-width: thin;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .stepper__step {
@@ -192,6 +210,34 @@
 .stepper__step.is-current {
   background: var(--surface-2);
   border-color: var(--accent);
+}
+
+.stepper__step.is-done .stepper__dot {
+  background: var(--success);
+  color: #041a10;
+}
+
+.stepper__step.is-skipped {
+  opacity: 0.75;
+}
+
+.stepper__step.is-skipped .stepper__dot {
+  background: var(--border);
+}
+
+.stepper__step.is-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.stepper__step.is-error .stepper__dot {
+  background: var(--danger);
+  color: #1a080a;
+}
+
+.stepper__step.is-pending .stepper__dot {
+  background: var(--warn);
+  color: #1a1408;
 }
 
 .stepper__dot {
@@ -270,8 +316,9 @@
 .quote-card dl div,
 .receipt-card dl div {
   display: grid;
-  grid-template-columns: 6rem 1fr;
+  grid-template-columns: minmax(4rem, 6rem) minmax(0, 1fr);
   gap: 0.5rem;
+  min-width: 0;
 }
 
 dt {
@@ -282,6 +329,9 @@ dt {
 dd {
   margin: 0;
   font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .decision-status {
@@ -310,6 +360,8 @@ dd {
 
 .rail-toggle {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 3px;
   border-radius: 10px;
   background: var(--bg);
@@ -385,7 +437,7 @@ dd {
 
 .ledger-type {
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   text-transform: lowercase;
 }
 
@@ -516,6 +568,219 @@ dd {
 
 .stepper__label {
   white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .stepper__label {
+    display: none;
+  }
+}
+
+.status-banner {
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}
+
+.status-banner--error {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
+}
+
+.status-banner--warn {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface-2));
+}
+
+.status-banner__title {
+  margin: 0 0 0.35rem;
+  font-weight: 700;
+}
+
+.error-banner {
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-2));
+}
+
+.error-banner__title {
+  margin: 0 0 0.35rem;
+  font-weight: 700;
+  color: var(--danger);
+}
+
+.error-banner__hint {
+  margin-bottom: 0.75rem;
+}
+
+.error-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.error-banner__actions .btn-ghost,
+.status-banner .btn-ghost {
+  width: auto;
+}
+
+.skeleton-block {
+  min-height: 4.5rem;
+}
+
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--border) 37%,
+    var(--surface-2) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background: var(--surface-2);
+  }
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+.skeleton--line {
+  height: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.skeleton--wide {
+  width: 100%;
+}
+
+.skeleton--short {
+  width: 55%;
+}
+
+.skeleton--gauge {
+  height: 10px;
+  margin: 0.75rem 0;
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-right: 0.35rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.1em;
+  animation: btn-spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-spinner {
+    animation: none;
+    border-right-color: currentColor;
+    opacity: 0.5;
+  }
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.intent-flow-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.intent-flow__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-start;
+  margin-bottom: 0.45rem;
+}
+
+.intent-flow__title {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.intent-flow__chip {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.intent-track {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.intent-track__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  padding: 0.12rem 0.3rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.intent-track__step.state-done {
+  color: var(--success);
+}
+
+.intent-track__step.state-rejected,
+.intent-track__step.state-failed {
+  color: var(--danger);
+}
+
+.intent-track__step.state-pending,
+.intent-track__step.state-waiting {
+  color: var(--warn);
+}
+
+.pending-elapsed {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.pending-slow-hint {
+  margin-top: 0.35rem;
+}
+
+.unavailable {
+  font-style: italic;
 }
 
 .sidebar {

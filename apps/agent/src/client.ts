@@ -6,6 +6,10 @@ export interface CreateIntentBody {
   amount: number;
   currency: string;
   purpose: string;
+  /** Client-chosen intent id; resending the same id + content replays instead of paying again (F14). */
+  id?: string;
+  /** ISO 8601; default: the server clock. If set, send the same value on every retry. */
+  createdAt?: string;
 }
 
 export type IntentPaymentResponse = PaymentResult & { intent: { id: string; createdAt: string; agentId: string } };
@@ -18,14 +22,35 @@ export interface LedgerResponse {
 export class ApiClientError extends Error {
   override name = 'ApiClientError';
   readonly status?: number;
-  constructor(message: string, status?: number) {
+  /**
+   * The request may or may not have reached the server and a resend of the same idempotent
+   * request is safe and may succeed: timeouts, dropped connections and HTTP 5xx. False for
+   * 4xx and for connection refused / DNS failures (the API is down).
+   */
+  readonly retryable: boolean;
+  constructor(message: string, status?: number, retryable = status !== undefined && status >= 500) {
     super(message);
     this.status = status;
+    this.retryable = retryable;
   }
 }
 
 /** Per-request timeout so a hung API cannot stall the agent forever. */
 export const REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * Timeout for POST /intents, which can include the rail payment: longer than core's
+ * DEFAULT_PAY_TIMEOUT_MS (60 s) so the server answers first in the normal case.
+ */
+export const SUBMIT_TIMEOUT_MS = 70_000;
+
+const NOT_REACHED = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
+
+function fetchFailed(err: unknown): ApiClientError {
+  const detail = err instanceof Error ? err.message : String(err);
+  const cause = err instanceof Error ? (err.cause as { code?: unknown } | undefined) : undefined;
+  const notReached = typeof cause?.code === 'string' && NOT_REACHED.has(cause.code);
+  return new ApiClientError(`fetch_failed: ${detail}`, undefined, !notReached);
+}
 
 function trimBase(apiUrl: string): string {
   return apiUrl.replace(/\/+$/, '');
@@ -53,18 +78,21 @@ async function assertOk(res: Response): Promise<unknown> {
   return body;
 }
 
-export async function postIntent(apiUrl: string, body: CreateIntentBody): Promise<IntentPaymentResponse> {
+export async function postIntent(
+  apiUrl: string,
+  body: CreateIntentBody,
+  timeoutMs: number = SUBMIT_TIMEOUT_MS,
+): Promise<IntentPaymentResponse> {
   let res: Response;
   try {
     res = await fetch(`${trimBase(apiUrl)}/intents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new ApiClientError(`fetch_failed: ${detail}`);
+    throw fetchFailed(err);
   }
   return (await assertOk(res)) as IntentPaymentResponse;
 }

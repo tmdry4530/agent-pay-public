@@ -1,7 +1,19 @@
 import type { PaymentAdapter } from './adapter.ts';
 import { LedgerError, type Ledger } from './ledger.ts';
 import { FailureCode, PaymentError, type PaymentResult } from './orchestrator.ts';
+import { AdapterTimeoutError, DEFAULT_STATUS_TIMEOUT_MS, checkTimeout, withTimeout } from './timeout.ts';
 import type { Rail, Receipt, ReceiptStatus } from './types.ts';
+
+/** Options for reconcile / refreshIntent. */
+export interface StatusOptions {
+  /** Timeout for each adapter.status call in ms (default DEFAULT_STATUS_TIMEOUT_MS = 45000; Infinity disables). */
+  statusTimeoutMs?: number;
+}
+
+function statusError(err: unknown): string {
+  if (err instanceof AdapterTimeoutError) return `${FailureCode.AdapterTimeout}: ${err.message}`;
+  return `${FailureCode.AdapterError}: ${err instanceof Error ? err.message : String(err)}`;
+}
 
 export interface ReconcileSummary {
   rail: Rail;
@@ -31,19 +43,23 @@ function validateStatusReceipt(
 
 /**
  * Asks `adapter.status` about every ledger entry that is paid with a `pending`
- * receipt on this adapter's rail, and settles the ones the rail reports as
+ * receipt on this adapter's rail (except needsManualResolve entries, which only
+ * resolveIntent settles), and settles the ones the rail reports as
  * `succeeded` or `failed` (Ledger.settleReceipt; `failed` also marks the payment
  * failed, so it drops out of the daily total).
  *
  * - No `status` method: returns `supported: false`, checked 0, writes nothing.
  * - Still `pending`: counted in `unchanged`, nothing written.
- * - `status` throws (`adapter_error: …`) or returns a receipt with the wrong
+ * - `status` throws (`adapter_error: …`), does not settle within `statusTimeoutMs`
+ *   (`adapter_timeout: …`, default DEFAULT_STATUS_TIMEOUT_MS) or returns a receipt with the wrong
  *   intentId / rail / status (`receipt_mismatch: …`): an `errors` item, nothing
  *   stored; the remaining entries are still processed.
  * - Idempotent: once settled, an entry is no longer pending, so a second run
  *   checks nothing and writes nothing.
  */
-export async function reconcile(ledger: Ledger, adapter: PaymentAdapter): Promise<ReconcileSummary> {
+export async function reconcile(ledger: Ledger, adapter: PaymentAdapter, options: StatusOptions = {}): Promise<ReconcileSummary> {
+  checkTimeout('statusTimeoutMs', options.statusTimeoutMs);
+  const timeoutMs = options.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS;
   const summary: ReconcileSummary = {
     rail: adapter.rail,
     supported: adapter.status !== undefined,
@@ -56,7 +72,7 @@ export async function reconcile(ledger: Ledger, adapter: PaymentAdapter): Promis
 
   const entries = await ledger.list();
   for (const entry of entries) {
-    if (entry.paymentStatus !== 'paid') continue;
+    if (entry.paymentStatus !== 'paid' || entry.needsManualResolve === true) continue;
     const stored = entry.receipt;
     if (!stored || stored.status !== 'pending' || stored.rail !== adapter.rail) continue;
 
@@ -64,10 +80,9 @@ export async function reconcile(ledger: Ledger, adapter: PaymentAdapter): Promis
     summary.checked += 1;
     let fresh: Receipt;
     try {
-      fresh = await adapter.status!(structuredClone(stored));
+      fresh = await withTimeout(adapter.status!(structuredClone(stored)), timeoutMs, 'status');
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      summary.errors.push({ intentId, error: `${FailureCode.AdapterError}: ${detail}` });
+      summary.errors.push({ intentId, error: statusError(err) });
       continue;
     }
     const mismatch = validateStatusReceipt(fresh, intentId, adapter.rail);
@@ -84,7 +99,7 @@ export async function reconcile(ledger: Ledger, adapter: PaymentAdapter): Promis
     } catch (err) {
       // LedgerError: a concurrent settle won the compare-and-set; nothing was written by this run.
       const detail = err instanceof Error ? err.message : String(err);
-      summary.errors.push({ intentId, error: `${err instanceof LedgerError ? 'ledger_conflict' : 'ledger_error'}: ${detail}` });
+      summary.errors.push({ intentId, error: `${err instanceof LedgerError && err.code === 'precondition_failed' ? 'ledger_conflict' : 'ledger_error'}: ${detail}` });
       continue;
     }
     summary.updated.push({ intentId, from: 'pending', to: fresh.status });
@@ -104,7 +119,9 @@ export async function refreshIntent(
   intentId: string,
   ledger: Ledger,
   adapter: PaymentAdapter,
+  options: StatusOptions = {},
 ): Promise<RefreshResult> {
+  checkTimeout('statusTimeoutMs', options.statusTimeoutMs);
   const entry = await ledger.get(intentId);
   if (!entry) throw new PaymentError('intent_not_found', `intent ${intentId} is not recorded`);
   if (!entry.receipt) {
@@ -114,6 +131,12 @@ export async function refreshIntent(
     throw new PaymentError(
       'receipt_not_pending',
       `intent ${intentId} receipt status is ${entry.receipt.status}, not pending`,
+    );
+  }
+  if (entry.needsManualResolve === true) {
+    throw new PaymentError(
+      'status_unsupported',
+      `intent ${intentId} needs a manual resolve (the rail outcome of the payment is unknown)`,
     );
   }
   if (adapter.status === undefined || entry.receipt.rail !== adapter.rail) {
@@ -129,10 +152,9 @@ export async function refreshIntent(
 
   let fresh: Receipt;
   try {
-    fresh = await adapter.status(structuredClone(stored));
+    fresh = await withTimeout(adapter.status(structuredClone(stored)), options.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS, 'status');
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new PaymentError('status_check_failed', `${FailureCode.AdapterError}: ${detail}`);
+    throw new PaymentError('status_check_failed', statusError(err));
   }
   const mismatch = validateStatusReceipt(fresh, intentId, adapter.rail);
   if (mismatch) {
@@ -147,7 +169,7 @@ export async function refreshIntent(
   try {
     await ledger.settleReceipt(intentId, fresh);
   } catch (err) {
-    if (err instanceof LedgerError) {
+    if (err instanceof LedgerError && err.code === 'precondition_failed') {
       const again = await ledger.get(intentId);
       if (again?.receipt && again.receipt.status !== 'pending') {
         throw new PaymentError(
