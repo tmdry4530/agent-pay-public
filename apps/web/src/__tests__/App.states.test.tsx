@@ -116,6 +116,36 @@ describe('App states', () => {
     window.history.replaceState({}, '', prev);
   });
 
+  it('follows the server rail without ?rail and never reports a mismatch', async () => {
+    const inner = createInMemoryClient();
+    const client: AgentPayClient = {
+      kind: 'http',
+      getHealth: () => Promise.resolve({ ok: true, rail: 'paypal' }),
+      getPolicy: () => inner.getPolicy(),
+      getLedger: () => inner.getLedger(),
+      submitIntent: (...a) => inner.submitIntent(...a),
+      approve: (...a) => inner.approve(...a),
+      reject: (...a) => inner.reject(...a),
+      refresh: (...a) => inner.refresh(...a),
+    };
+    const prev = window.location.href;
+    window.history.replaceState({}, '', '/');
+    try {
+      renderWith(client);
+      const user = userEvent.setup();
+      await waitFor(() => expect(screen.getByTestId('rail-paypal')).toHaveAttribute('aria-pressed', 'true'));
+      await user.click(screen.getByTestId('scenario-approved'));
+      await user.click(screen.getByTestId('btn-quote'));
+      expect(screen.getByTestId('btn-policy')).toBeEnabled();
+      // The in-memory client pays on the mock rail: receipt rail differs from server rail.
+      await user.click(screen.getByTestId('btn-policy'));
+      expect(await screen.findByTestId('receipt')).toBeInTheDocument();
+      expect(screen.queryByTestId('rail-mismatch')).not.toBeInTheDocument();
+    } finally {
+      window.history.replaceState({}, '', prev);
+    }
+  });
+
   it('shows pending elapsed and slow hint after threshold', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-01-01T12:00:00.000Z'));

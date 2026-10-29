@@ -7,7 +7,7 @@ import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
 import { describeError, type DescribedError } from './data/describeError';
 import { derivePipelineSteps } from './data/intentFlow';
-import { expectedRailFromSearch, railMismatchMessage } from './data/railQuery';
+import { detectRailMismatch, expectedRailFromSearch, railMismatchMessage } from './data/railQuery';
 import { ApiStatusBanner } from './components/ApiStatusBanner';
 import { ErrorBanner } from './components/ErrorBanner';
 import { IntentFlows } from './components/IntentFlows';
@@ -344,27 +344,15 @@ export default function App() {
     : null;
 
   const pipelineDisabled = !apiConnected || busy;
-  const railMismatch =
-    client.kind === 'http' &&
-    expectedRail &&
-    serverRail !== null &&
-    serverRail !== expectedRail;
-  const railMismatchMsg =
-    railMismatch && expectedRail
-      ? railMismatchMessage(apiBase, serverRail!, expectedRail)
-      : null;
-
-  const receiptRailMismatch =
-    client.kind === 'http' &&
-    serverRail &&
-    result?.receipt &&
-    result.receipt.rail !== serverRail;
-
-  const showRailBanner =
-    railMismatchMsg ||
-    (receiptRailMismatch
-      ? railMismatchMessage(apiBase, serverRail!, result!.receipt!.rail as Rail)
-      : null);
+  const railMismatch = detectRailMismatch({
+    clientKind: client.kind,
+    expected: expectedRail,
+    serverRail,
+    receiptRail: result?.receipt?.rail ?? null,
+  });
+  const showRailBanner = railMismatch
+    ? railMismatchMessage(apiBase, railMismatch.server, railMismatch.expected)
+    : null;
 
   const payBlocked = pipelineDisabled || !!showRailBanner;
 
