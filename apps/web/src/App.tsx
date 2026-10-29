@@ -488,6 +488,10 @@ export default function App({ clock = systemClock }: AppProps) {
       setResolveFocusTick((t) => t + 1);
       const entry = ledgerSnap?.entries.find((e) => e.intent.id === intentId);
       if (entry) {
+        // Selecting an intent from the Intents list replaces the scenario context, so the
+        // Agent task, scenario highlight and stepper all describe the selected intent.
+        setScenario(null);
+        setDraft(null);
         setIntent(entry.intent);
         const out = paymentResultFromLedgerEntry(entry);
         setResult(out);
@@ -669,10 +673,10 @@ export default function App({ clock = systemClock }: AppProps) {
 
           <PipelineStepper steps={pipelineSteps} stepperRef={stepperRef} mobileLabel={mobileLabel} />
 
-          {scenario && (
-            <div className="task-banner">
+          {(intent || scenario) && (
+            <div className="task-banner" data-testid="task-banner">
               <span className="label">Agent task</span>
-              <p>{scenario.task.purpose}</p>
+              <p>{intent?.purpose ?? scenario?.task.purpose}</p>
             </div>
           )}
 
@@ -776,7 +780,7 @@ export default function App({ clock = systemClock }: AppProps) {
 
           {decision && (
             <div
-              className={`decision-card status-${decision.status}`}
+              className={`decision-card status-${decision.status}${manualResolvePending ? ' status-needs-check' : ''}`}
               data-testid="decision"
             >
               <h3>Decision</h3>

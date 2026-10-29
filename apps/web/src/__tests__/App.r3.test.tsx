@@ -8,6 +8,7 @@ import type { AgentPayClient } from '../data/agentPayClient';
 import { RACE_409_CODES, STUCK_SUBMITTING_MS } from '../data/compat';
 import { race409Message } from '../data/compat';
 import { createInMemoryClient } from '../data/inMemoryClient';
+import { DEMO_SCENARIOS } from '../types';
 
 function renderWith(client: AgentPayClient, clock?: () => Date) {
   return render(
@@ -321,6 +322,37 @@ describe('App r3 resolve and race banners', () => {
     expect(quoteCard).toHaveTextContent('$12.00');
     expect(within(quoteCard).getByText(openaiIntentId)).toBeInTheDocument();
     expect(within(quoteCard).queryByText('near-compute')).not.toBeInTheDocument();
+
+    const needsCheckPurpose = DEMO_SCENARIOS[0]!.task.purpose;
+    const scenario75Purpose = DEMO_SCENARIOS[2]!.task.purpose;
+    const taskBanner = screen.getByTestId('task-banner');
+    expect(taskBanner).toHaveTextContent(needsCheckPurpose);
+    expect(taskBanner).not.toHaveTextContent(scenario75Purpose);
+
+    for (const testId of ['scenario-approved', 'scenario-rejected', 'scenario-needs-approval'] as const) {
+      const card = screen.getByTestId(testId);
+      expect(card).toHaveAttribute('aria-pressed', 'false');
+      expect(card).not.toHaveClass('is-selected');
+    }
+
+    const stepper = screen.getByRole('list', { name: 'Pipeline steps' });
+    expect(stepper.querySelectorAll('.stepper__step.is-error')).toHaveLength(0);
+
+    const decision = screen.getByTestId('decision');
+    expect(decision).toHaveClass('status-needs-check');
+    expect(decision).toHaveClass('status-approved');
+    expect(screen.getByTestId('result-status')).toHaveClass('status-needs-check');
+  });
+
+  it('paid flow does not apply needs-check styling on decision or result badge', async () => {
+    renderWith(createInMemoryClient({ now: () => new Date('2026-03-01T12:00:00.000Z') }));
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('scenario-approved'));
+    await user.click(screen.getByTestId('btn-quote'));
+    await user.click(screen.getByTestId('btn-policy'));
+    await waitFor(() => expect(screen.getByTestId('result-status')).toHaveTextContent('paid'));
+    expect(screen.getByTestId('decision')).not.toHaveClass('status-needs-check');
+    expect(screen.getByTestId('result-status')).not.toHaveClass('status-needs-check');
   });
 
   it('btn-open-resolve opens resolve form for needs-check entry', async () => {

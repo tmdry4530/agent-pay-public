@@ -352,6 +352,11 @@ dd {
   border-color: rgba(230, 180, 80, 0.45);
 }
 
+/* Needs check (pending): same warn family as the manual-resolve banner/chip, never green. */
+.decision-card.status-needs-check {
+  border-color: var(--warn);
+}
+
 .terminal {
   color: var(--danger);
   font-weight: 600;
@@ -487,6 +492,12 @@ dd {
 .result-badge.status-failed {
   border-color: rgba(240, 113, 120, 0.45);
   color: var(--danger);
+}
+
+.result-badge.status-needs-check {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+  color: var(--warn);
 }
 
 .reason-code {
