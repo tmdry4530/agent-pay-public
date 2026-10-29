@@ -34,7 +34,7 @@ const pageErrors = [];
 const consoleErrors = [];
 /** @type {ReturnType<typeof setTimeout>[]} */
 const captionTimers = [];
-/** @type {{ tag: string; testId: string; elTop: number; elBottom: number; captionTop: number; captionBottom: number; overlap: boolean; fullyVisible: boolean }[]} */
+/** @type {Record<string, unknown>[]} */
 const captionOverlapChecks = [];
 /** @type {{ tag: string; expected: string; actual: string }[]} */
 const spentChecks = [];
@@ -565,39 +565,86 @@ async function scrollForGaugeHighlight(page) {
 }
 
 async function scrollAboveCaptionSel(page, selector) {
-  await page.evaluate((sel) => {
-    const el = document.querySelector(sel);
-    if (!el) return;
-    const box = document.querySelector('#submission-caption .submission-caption__box');
-    const captionTop = box
-      ? box.getBoundingClientRect().top
-      : window.innerHeight - 140;
-    const gap = 24;
-    const minTop = 8;
-    const targetBottom = captionTop - gap;
-    const rect = el.getBoundingClientRect();
-    if (rect.bottom > targetBottom) {
-      const scrollDown = rect.bottom - targetBottom;
-      const topAfter = rect.top - scrollDown;
-      const want = topAfter < minTop ? rect.top - minTop : scrollDown;
-      // Near the end of the page there may not be enough document left to scroll the element
-      // above the caption; grow a recorder-owned spacer so the scroll can happen.
-      const root = document.scrollingElement || document.documentElement;
-      const maxScroll = root.scrollHeight - window.innerHeight - window.scrollY;
-      if (want > maxScroll) {
-        let spacer = document.getElementById('record-scroll-spacer');
-        if (!spacer) {
-          spacer = document.createElement('div');
-          spacer.id = 'record-scroll-spacer';
-          spacer.setAttribute('aria-hidden', 'true');
-          document.body.appendChild(spacer);
+  await page.evaluate(
+    ({ sel, gap, minTop }) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const box = document.querySelector('#submission-caption .submission-caption__box');
+      const captionTop = box
+        ? box.getBoundingClientRect().top
+        : window.innerHeight - 140;
+      const targetBottom = captionTop - gap;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom > targetBottom) {
+        const scrollDown = rect.bottom - targetBottom;
+        const topAfter = rect.top - scrollDown;
+        const want = topAfter < minTop ? rect.top - minTop : scrollDown;
+        const root = document.scrollingElement || document.documentElement;
+        const maxScroll = root.scrollHeight - window.innerHeight - window.scrollY;
+        if (want > maxScroll) {
+          let spacer = document.getElementById('record-scroll-spacer');
+          if (!spacer) {
+            spacer = document.createElement('div');
+            spacer.id = 'record-scroll-spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(spacer);
+          }
+          const cur = Number.parseFloat(spacer.style.height || '0') || 0;
+          const zoom = Number.parseFloat(document.documentElement.style.zoom || '1') || 1;
+          spacer.style.height = `${Math.ceil(cur + (want - maxScroll) / zoom + 40)}px`;
         }
-        const cur = spacer.getBoundingClientRect().height;
-        spacer.style.height = `${Math.ceil(cur + (want - maxScroll) / 0.5 + 40)}px`;
+        window.scrollBy({ top: want, behavior: 'instant' });
       }
-      window.scrollBy({ top: want, behavior: 'instant' });
-    }
-  }, selector);
+    },
+    { sel: selector, gap: 24, minTop: 8 },
+  );
+  await pause(page, 400);
+}
+
+async function scrollIntoViewAboveCaptionSel(page, selector, { gap = 16, minTop = 8 } = {}) {
+  await page.evaluate(
+    ({ sel, gap, minTop }) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const box = document.querySelector('#submission-caption .submission-caption__box');
+      const captionTop = box ? box.getBoundingClientRect().top : window.innerHeight - 140;
+      const targetBottom = captionTop - gap;
+
+      const scrollUpIfNeeded = () => {
+        const rect = el.getBoundingClientRect();
+        if (rect.top < minTop) {
+          window.scrollBy({ top: rect.top - minTop, behavior: 'instant' });
+        }
+      };
+
+      scrollUpIfNeeded();
+
+      let rect = el.getBoundingClientRect();
+      if (rect.bottom > targetBottom) {
+        const scrollDown = rect.bottom - targetBottom;
+        const topAfter = rect.top - scrollDown;
+        const want = topAfter < minTop ? rect.top - minTop : scrollDown;
+        const root = document.scrollingElement || document.documentElement;
+        const maxScroll = root.scrollHeight - window.innerHeight - window.scrollY;
+        if (want > maxScroll) {
+          let spacer = document.getElementById('record-scroll-spacer');
+          if (!spacer) {
+            spacer = document.createElement('div');
+            spacer.id = 'record-scroll-spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(spacer);
+          }
+          const cur = Number.parseFloat(spacer.style.height || '0') || 0;
+          const zoom = Number.parseFloat(document.documentElement.style.zoom || '1') || 1;
+          spacer.style.height = `${Math.ceil(cur + (want - maxScroll) / zoom + 40)}px`;
+        }
+        window.scrollBy({ top: want, behavior: 'instant' });
+      }
+
+      scrollUpIfNeeded();
+    },
+    { sel: selector, gap, minTop },
+  );
   await pause(page, 400);
 }
 
@@ -623,6 +670,75 @@ async function scrollAboveCaption(page, testId) {
 }
 
 const FULL = { requireFullyVisible: true };
+
+function captionCheckFails(c) {
+  if (c.kind === 'intents-panel') return Boolean(c.overlap);
+  return Boolean(c.overlap || (c.requireFullyVisible && !c.fullyVisible));
+}
+
+async function assertCaptionClearOfIntents(page, tag) {
+  const result = await page.evaluate(() => {
+    const box = document.querySelector('#submission-caption .submission-caption__box');
+    const root = document.getElementById('submission-caption');
+    if (!box || !root) return null;
+    const rootStyle = getComputedStyle(root);
+    if (rootStyle.display === 'none' || rootStyle.visibility === 'hidden') return null;
+    const captionRect = box.getBoundingClientRect();
+    if (captionRect.width <= 0 || captionRect.height <= 0) return null;
+
+    let panel = document.querySelector('[data-testid="intent-flows"]');
+    panel = panel?.closest('.panel') ?? panel;
+    if (!panel) {
+      for (const candidate of document.querySelectorAll('.sidebar .panel')) {
+        const heading = candidate.querySelector('h2, h3, .panel__title');
+        const label = heading?.textContent ?? candidate.textContent ?? '';
+        if (/\bIntents\b/i.test(label.slice(0, 80))) {
+          panel = candidate;
+          break;
+        }
+      }
+    }
+    if (!panel) return null;
+
+    const panelRect = panel.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const clip = (r) => ({
+      left: Math.max(0, r.left),
+      top: Math.max(0, r.top),
+      right: Math.min(vw, r.right),
+      bottom: Math.min(vh, r.bottom),
+    });
+    const c = clip(captionRect);
+    const p = clip(panelRect);
+    if (c.right <= c.left || c.bottom <= c.top) return null;
+    if (p.right <= p.left || p.bottom <= p.top) return null;
+    const overlap = !(c.right <= p.left || c.left >= p.right || c.bottom <= p.top || c.top >= p.bottom);
+    return {
+      overlap,
+      captionRect: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
+      panelRect: { left: p.left, top: p.top, right: p.right, bottom: p.bottom },
+    };
+  });
+
+  if (!result) return;
+
+  const check = {
+    tag: `${tag}-intents-panel`,
+    kind: 'intents-panel',
+    overlap: result.overlap,
+    captionRect: result.captionRect,
+    panelRect: result.panelRect,
+  };
+  captionOverlapChecks.push(check);
+  if (check.overlap) {
+    const cr = check.captionRect;
+    const pr = check.panelRect;
+    throw new Error(
+      `${tag} caption overlaps Intents panel: caption ${cr.left.toFixed(0)}–${cr.right.toFixed(0)}×${cr.top.toFixed(0)}–${cr.bottom.toFixed(0)} vs panel ${pr.left.toFixed(0)}–${pr.right.toFixed(0)}×${pr.top.toFixed(0)}–${pr.bottom.toFixed(0)}`,
+    );
+  }
+}
 
 async function assertSelNotUnderCaption(page, selector, tag, { requireFullyVisible = false } = {}) {
   const metrics = await page.evaluate(
@@ -668,6 +784,7 @@ async function assertSelNotUnderCaption(page, selector, tag, { requireFullyVisib
         (check.elTop < 0 ? ' (partially scrolled off top)' : ''),
     );
   }
+  await assertCaptionClearOfIntents(page, tag);
   return check;
 }
 
@@ -787,6 +904,37 @@ async function setCaption(page, sceneLabel, text) {
       }
       labelEl.textContent = label;
       textEl.textContent = body;
+
+      const sidebar = document.querySelector('.sidebar');
+      if (sidebar) {
+        const sidebarLeft = sidebar.getBoundingClientRect().left;
+        const leftEdge = 16;
+        const rightEdge = sidebarLeft - 16;
+        const center = (leftEdge + rightEdge) / 2;
+        const maxW = Math.max(120, sidebarLeft - 48);
+        root.style.left = `${center}px`;
+        root.style.transform = 'translateX(-50%)';
+        root.style.maxWidth = `${maxW}px`;
+
+        let boxRect = box.getBoundingClientRect();
+        const limitRight = sidebarLeft - 16;
+        if (boxRect.right > limitRight) {
+          const overflow = boxRect.right - limitRight;
+          const newCenter = center - overflow;
+          root.style.left = `${newCenter}px`;
+          boxRect = box.getBoundingClientRect();
+          if (boxRect.right > limitRight) {
+            root.style.maxWidth = `${Math.max(80, maxW - (boxRect.right - limitRight) - 8)}px`;
+          }
+        }
+        if (box.getBoundingClientRect().left < leftEdge) {
+          root.style.left = `${leftEdge + box.getBoundingClientRect().width / 2}px`;
+        }
+      } else {
+        root.style.left = '50%';
+        root.style.transform = 'translateX(-50%)';
+        root.style.maxWidth = '1100px';
+      }
     },
     { label: sceneLabel, body: text },
   );
@@ -1278,7 +1426,32 @@ try {
     const scene = scenes.find((s) => s.role === role);
     if (!scene) throw new Error(`no scene for role ${role}`);
     const actualStart = (Date.now() - t0) / 1000;
-    await actions(scene, () => scheduleSceneCaptions(page, scene));
+    const webScene = role !== 'cli';
+    /** @type {Promise<void> | null} */
+    let captionIntentsAfterSchedule = null;
+    await actions(scene, () => {
+      scheduleSceneCaptions(page, scene);
+      if (webScene) {
+        captionIntentsAfterSchedule = (async () => {
+          await pause(page, 1000);
+          await assertCaptionClearOfIntents(page, `${scene.id}-captions-on`);
+        })();
+        // Avoid an unhandled rejection while actions are still running; re-awaited below.
+        captionIntentsAfterSchedule.catch(() => {});
+      }
+    });
+    if (captionIntentsAfterSchedule) {
+      await captionIntentsAfterSchedule;
+    }
+    const actionsEndSec = (Date.now() - t0) / 1000;
+    if (actionsEndSec > scene.end) {
+      throw new Error(
+        `${scene.id} scene actions finished at ${actionsEndSec.toFixed(2)}s, past planned end ${scene.end}s`,
+      );
+    }
+    if (webScene) {
+      await assertCaptionClearOfIntents(page, `${scene.id}-scene-end`);
+    }
     await until(scene.end);
     const actualEnd = (Date.now() - t0) / 1000;
     timingLog.push({
@@ -1290,6 +1463,7 @@ try {
       plannedEnd: scene.end,
       actualStart,
       actualEnd,
+      actionsEndSec,
     });
   }
 
@@ -1526,7 +1700,13 @@ try {
     await scrollAboveCaptionSel(page, intentSel);
     await assertSelNotUnderCaption(page, intentSel, 's7-intent-resolved', FULL);
     await highlightIntentPanelAndItem(page, intentSel);
+
+    await scrollIntoViewAboveCaptionSel(page, '[data-testid="gauge"]', { gap: 16, minTop: 8 });
+    await highlight(page, 'gauge');
+    await assertNotUnderCaption(page, 'gauge', 's7-gauge-107', FULL);
+    resolveTimingFields.s7GaugeVisibleAtSec = (Date.now() - t0) / 1000;
     await assertSpent(page, 's7-end', '$107.00');
+    await pause(page, 1500);
   });
 
   // Scene 8 — CLI
@@ -1621,9 +1801,7 @@ try {
     fs.writeFileSync(process.env.TIMING_OUT, timingJson);
   }
 
-  const captionFailing = captionOverlapChecks.filter(
-    (c) => c.overlap || (c.requireFullyVisible && !c.fullyVisible),
-  );
+  const captionFailing = captionOverlapChecks.filter((c) => captionCheckFails(c));
   console.log(
     `caption checks: ${captionOverlapChecks.length} total, ${captionFailing.length} failing`,
   );
