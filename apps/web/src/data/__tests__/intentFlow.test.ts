@@ -280,4 +280,24 @@ describe('derivePipelineSteps', () => {
     const payment = steps.find((s) => s.step === 'payment');
     expect(payment).toMatchObject({ state: 'pending', ariaCurrent: true });
   });
+
+  it('approved decision with failed payment marks payment error, not decision', () => {
+    const steps = derivePipelineSteps('payment', {
+      intentId: 'i1',
+      status: 'failed',
+      decision: { status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok` },
+      error: 'payment_failed: x',
+    });
+    expect(steps.find((s) => s.step === 'decision')?.state).toBe('done');
+    expect(steps.find((s) => s.step === 'payment')?.state).toBe('error');
+  });
+
+  it('rejected decision still marks decision step as error', () => {
+    const steps = derivePipelineSteps('decision', {
+      intentId: 'i1',
+      status: 'rejected',
+      decision: { status: 'rejected', reason: `${ReasonCode.PerTxLimitExceeded}: too big` },
+    });
+    expect(steps.find((s) => s.step === 'decision')?.state).toBe('error');
+  });
 });

@@ -497,9 +497,42 @@ dd {
 }
 
 .human-outcome {
+  margin: 0.5rem 0 0;
   font-weight: 600;
-  margin-top: 0.75rem;
   color: var(--success);
+}
+
+.payment-outcome {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.payment-outcome__label {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.payment-outcome__text {
+  margin: 0.35rem 0 0;
+  font-weight: 600;
+}
+
+.payment-outcome__text--failed {
+  color: var(--danger);
+}
+
+.payment-outcome__text--succeeded {
+  color: var(--success);
+}
+
+.payment-outcome__note {
+  margin: 0.35rem 0 0;
 }
 
 .receipt-status--succeeded {

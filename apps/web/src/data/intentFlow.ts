@@ -343,8 +343,7 @@ export function derivePipelineSteps(
     result.status !== 'rejected' &&
     reasonCode(result.decision) !== ReasonCode.RejectedByHuman;
 
-  const decisionError =
-    result?.status === 'rejected' || result?.status === 'failed';
+  const decisionError = result?.status === 'rejected';
 
   return PIPELINE_ORDER.map((s, i) => {
     let state: PipelineStepState = 'upcoming';

@@ -528,6 +528,36 @@ export default function App({ clock = systemClock }: AppProps) {
     result?.receipt?.status === 'pending' &&
     (needsManualResolve(result) ||
       (currentLedgerEntry !== undefined && needsManualResolve(currentLedgerEntry)));
+  const paymentResolution = currentLedgerEntry?.resolution;
+  const paymentOutcomeText = (() => {
+    if (!result) return null;
+    if (paymentResolution) {
+      if (paymentResolution.status === 'failed') {
+        return `Payment failed — resolved by ${paymentResolution.resolvedBy}`;
+      }
+      if (paymentResolution.status === 'succeeded') {
+        return `Payment succeeded — resolved by ${paymentResolution.resolvedBy}`;
+      }
+      return null;
+    }
+    if (result.status === 'rejected' || result.status === 'needs_approval') return null;
+    if (result.status === 'failed') return 'Payment failed';
+    if (result.status === 'paid' && !needsManualResolve(result)) return 'Payment succeeded';
+    return null;
+  })();
+  const paymentOutcomeTone =
+    paymentOutcomeText == null
+      ? null
+      : paymentOutcomeText.startsWith('Payment failed')
+        ? 'failed'
+        : paymentOutcomeText.startsWith('Payment succeeded')
+          ? 'succeeded'
+          : null;
+  const showPaymentFailureDetail =
+    result &&
+    result.error &&
+    (result.status === 'failed' || manualResolvePending) &&
+    !paymentResolution;
   const canReset = client.kind === 'mock' && client.reset !== undefined;
 
   const headerBadge =
@@ -741,15 +771,6 @@ export default function App({ clock = systemClock }: AppProps) {
               data-testid="decision"
             >
               <h3>Decision</h3>
-              {result && (
-                <span
-                  className={`result-badge status-${result.status}${manualResolvePending ? ' status-needs-check' : ''}`}
-                  data-testid="result-status"
-                  aria-live="polite"
-                >
-                  {displayRunStatus(result, currentLedgerEntry) ?? result.status.replace('_', ' ')}
-                </span>
-              )}
               <p className="decision-status">{decision.status.replace('_', ' ')}</p>
               {reasonParts && (
                 <>
@@ -767,20 +788,44 @@ export default function App({ clock = systemClock }: AppProps) {
                   {reasonParts.detail && <p>{reasonParts.detail}</p>}
                 </>
               )}
-              {result?.status === 'failed' && result.error && (
-                <p className="failure-detail hint" data-testid="payment-failure-detail">
-                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
-                </p>
-              )}
-              {manualResolvePending && result?.error && (
-                <p className="failure-detail hint" data-testid="payment-failure-detail">
-                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
-                </p>
-              )}
               {humanOutcome && (
                 <p className="human-outcome" data-testid="human-outcome">
                   {humanOutcome}
                 </p>
+              )}
+              {result && (
+                <div className="payment-outcome" data-testid="payment-outcome">
+                  <p className="payment-outcome__label">
+                    {result.status === 'rejected' || result.status === 'needs_approval' ? 'Status' : 'Payment outcome'}
+                  </p>
+                  <span
+                    className={`result-badge status-${result.status}${manualResolvePending ? ' status-needs-check' : ''}`}
+                    data-testid="result-status"
+                    aria-live="polite"
+                  >
+                    {displayRunStatus(result, currentLedgerEntry) ?? result.status.replace('_', ' ')}
+                  </span>
+                  {paymentOutcomeText && (
+                    <p
+                      className={
+                        paymentOutcomeTone
+                          ? `payment-outcome__text payment-outcome__text--${paymentOutcomeTone}`
+                          : 'payment-outcome__text'
+                      }
+                      data-testid="payment-outcome-text"
+                    >
+                      {paymentOutcomeText}
+                    </p>
+                  )}
+                  {paymentResolution?.note && (
+                    <p className="payment-outcome__note hint">{paymentResolution.note}</p>
+                  )}
+                  {showPaymentFailureDetail && (
+                    <p className="failure-detail hint" data-testid="payment-failure-detail">
+                      {failureInfo(result.error!).label}. {failureInfo(result.error!).explanation}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}
