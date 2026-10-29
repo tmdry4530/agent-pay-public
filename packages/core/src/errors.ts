@@ -8,8 +8,15 @@
  *   lost compare-and-set race (ifStatus / settleReceipt on a non-pending receipt) or an
  *   invalid lifecycle transition. Nothing was written; re-read and decide.
  * - invalid_input: a bad argument (unparseable date, receipt for another intent).
+ * - lock_timeout: another live process held the ledger's lock file for longer than
+ *   LedgerOptions.lockTimeoutMs. Nothing was written; transient, safe to retry.
  */
-export type LedgerErrorCode = 'not_found' | 'duplicate_intent' | 'precondition_failed' | 'invalid_input';
+export type LedgerErrorCode =
+  | 'not_found'
+  | 'duplicate_intent'
+  | 'precondition_failed'
+  | 'invalid_input'
+  | 'lock_timeout';
 
 export class LedgerError extends Error {
   override name = 'LedgerError';

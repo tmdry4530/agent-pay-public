@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { LedgerError } from './errors.ts';
 import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
 
@@ -44,7 +44,20 @@ export interface LedgerOptions {
   filePath: string;
   /** Injectable clock; defaults to () => new Date(). */
   now?: () => Date;
+  /**
+   * How long a write waits for the cross-process lock file (`<filePath>.lock`) held by
+   * another live process before failing with LedgerError 'lock_timeout'.
+   * Default DEFAULT_LOCK_TIMEOUT_MS (5000).
+   */
+  lockTimeoutMs?: number;
 }
+
+export const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+/** A lock file older than this is treated as abandoned even if its pid is alive (pid reuse). */
+export const LOCK_STALE_MS = 60_000;
+
+/** One promise chain per resolved file path, shared by every Ledger instance in this process. */
+const pathQueues = new Map<string, Promise<unknown>>();
 
 export { LedgerError, type LedgerErrorCode } from './errors.ts';
 
@@ -78,19 +91,27 @@ const emptyFile = (): LedgerFile => ({ version: 1, entries: [] });
  *
  * Every operation re-reads the file, so several Ledger instances on the same
  * path see each other's writes. Writes are atomic (temp file in the same dir +
- * rename) and serialized within one instance. There is NO cross-process lock:
- * use a single writer process per file.
+ * rename). Every read-modify-write is serialized per resolved file path within
+ * the process (all instances share one queue) and across processes by an
+ * exclusive lock file `<filePath>.lock` (O_EXCL create; contains the holder's
+ * pid). A lock whose pid is dead, or that is older than LOCK_STALE_MS, is taken
+ * over; waiting longer than lockTimeoutMs throws LedgerError 'lock_timeout'.
+ * Taking over a stale lock is best-effort (two processes stealing the same stale
+ * lock at the same instant can both proceed); it only matters after a crash.
  *
  * Daily totals bucket by the UTC date of `intent.createdAt`.
  */
 export class Ledger {
   readonly filePath: string;
   readonly #now: () => Date;
-  #queue: Promise<unknown> = Promise.resolve();
+  readonly #key: string;
+  readonly #lockTimeoutMs: number;
 
   constructor(options: LedgerOptions) {
     this.filePath = options.filePath;
     this.#now = options.now ?? (() => new Date());
+    this.#key = resolve(options.filePath);
+    this.#lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   }
 
   /** Reads the ledger, creating an empty file when it does not exist. */
@@ -294,26 +315,73 @@ export class Ledger {
   }
 
   #serialize<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.#queue.then(fn, fn);
-    this.#queue = run.catch(() => undefined);
+    const key = this.#key;
+    const run = (pathQueues.get(key) ?? Promise.resolve()).then(fn, fn);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    pathQueues.set(key, tail);
+    void tail.then(() => {
+      if (pathQueues.get(key) === tail) pathQueues.delete(key);
+    });
     return run;
   }
 
   #mutate<T>(fn: (file: LedgerFile) => T): Promise<T> {
-    return this.#serialize(async () => {
-      const file = await this.#read();
-      const result = fn(file);
-      await this.#write(file);
-      return structuredClone(result);
-    });
+    return this.#serialize(() =>
+      this.#withFileLock(async () => {
+        const file = await this.#read(true);
+        const result = fn(file);
+        await this.#write(file);
+        return structuredClone(result);
+      }),
+    );
   }
 
-  async #read(): Promise<LedgerFile> {
+  /** Runs `fn` while holding the cross-process lock file `<filePath>.lock`. */
+  async #withFileLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lockPath = `${this.filePath}.lock`;
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const deadline = Date.now() + this.#lockTimeoutMs;
+    let delay = 2;
+    for (;;) {
+      try {
+        const fh = await open(lockPath, 'wx');
+        try {
+          await fh.writeFile(`${process.pid}\n`, 'utf8');
+        } finally {
+          await fh.close();
+        }
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        if (await lockIsStale(lockPath)) {
+          await rm(lockPath, { force: true });
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new LedgerError('lock_timeout', `ledger ${this.filePath} is locked by another process (${lockPath})`);
+        }
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 50);
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      await rm(lockPath, { force: true });
+    }
+  }
+
+  /** `locked`: the caller holds the file lock, so a missing file may be created here. */
+  async #read(locked = false): Promise<LedgerFile> {
     let raw: string;
     try {
       raw = await readFile(this.filePath, 'utf8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      if (!locked) return this.#withFileLock(() => this.#read(true));
       const file = emptyFile();
       await this.#write(file);
       return file;
@@ -340,6 +408,28 @@ export class Ledger {
       await rm(tmp, { force: true });
       throw err;
     }
+  }
+}
+
+/** True when the lock's holder pid is dead, or the lock is older than LOCK_STALE_MS. */
+async function lockIsStale(lockPath: string): Promise<boolean> {
+  let content: string;
+  let mtimeMs: number;
+  try {
+    [content, mtimeMs] = await Promise.all([readFile(lockPath, 'utf8'), stat(lockPath).then((s) => s.mtimeMs)]);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false; // released meanwhile: just retry
+    throw err;
+  }
+  if (Date.now() - mtimeMs > LOCK_STALE_MS) return true;
+  const pid = Number.parseInt(content, 10);
+  if (!Number.isInteger(pid) || pid <= 0) return false; // being written right now
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ESRCH';
   }
 }
 
