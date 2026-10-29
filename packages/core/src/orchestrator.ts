@@ -3,6 +3,7 @@ import type { PaymentAdapter } from './adapter.ts';
 import { LedgerError } from './errors.ts';
 import type { Ledger, LedgerEntry, PaymentOutcome } from './ledger.ts';
 import { ReasonCode, evaluate } from './policy.ts';
+import { AdapterTimeoutError, DEFAULT_PAY_TIMEOUT_MS, checkTimeout, withTimeout } from './timeout.ts';
 import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Policy, Receipt } from './types.ts';
 
 export type RunStatus = 'paid' | 'rejected' | 'needs_approval' | 'failed';
@@ -40,6 +41,8 @@ export const FailureCode = {
   PaymentDeclined: 'payment_declined',
   /** adapter.pay threw (outcome unknown: needsManualResolve). Also used for adapter.status throwing. */
   AdapterError: 'adapter_error',
+  /** adapter.pay / adapter.status did not settle within the timeout (pay: needsManualResolve). */
+  AdapterTimeout: 'adapter_timeout',
   /** The receipt's intentId/rail/status violates the PaymentAdapter contract (pay: needsManualResolve). */
   ReceiptMismatch: 'receipt_mismatch',
   /** Replay of an entry stored as failed (the original error text is not persisted). */
@@ -71,7 +74,13 @@ export class PaymentError extends Error {
 /** `actor` of history records made by policy evaluation (see DecisionRecord). */
 const POLICY_ACTOR = 'policy';
 
-export interface ApproveOptions {
+/** Options for runPayment / approve. */
+export interface PaymentOptions {
+  /** Timeout for adapter.pay in ms (default DEFAULT_PAY_TIMEOUT_MS = 60000; Infinity disables). */
+  payTimeoutMs?: number;
+}
+
+export interface ApproveOptions extends PaymentOptions {
   policy: Policy;
   ledger: Ledger;
   adapter: PaymentAdapter;
@@ -105,7 +114,9 @@ export async function runPayment(
   policy: Policy,
   ledger: Ledger,
   adapter: PaymentAdapter,
+  options: PaymentOptions = {},
 ): Promise<PaymentResult> {
+  checkTimeout('payTimeoutMs', options.payTimeoutMs);
   const decide = (state: LedgerState) => ({ decision: evaluate(policy, intent, state), actor: POLICY_ACTOR });
   let decision: Decision;
   if (typeof ledger.recordIntentAndDecide === 'function') {
@@ -129,7 +140,7 @@ export async function runPayment(
   if (decision.status !== 'approved') {
     return { intentId: intent.id, status: decision.status, decision };
   }
-  return payApproved(intent, decision, ledger, adapter);
+  return payApproved(intent, decision, ledger, adapter, options);
 }
 
 /**
@@ -145,6 +156,7 @@ export async function runPayment(
  */
 export async function approve(intentId: string, options: ApproveOptions): Promise<PaymentResult> {
   const { policy, ledger, adapter, approver } = options;
+  checkTimeout('payTimeoutMs', options.payTimeoutMs);
   const entry = await pendingEntry(ledger, intentId);
   const by = approver === undefined ? 'a human' : `"${approver}"`;
   const { amount, currency, payee } = entry.intent;
@@ -171,7 +183,7 @@ export async function approve(intentId: string, options: ApproveOptions): Promis
     raceLost(ledger, intentId, err),
   );
   if (decision.status !== 'approved') return { intentId, status: 'rejected', decision };
-  return payApproved(entry.intent, decision, ledger, adapter);
+  return payApproved(entry.intent, decision, ledger, adapter, options);
 }
 
 type DecideFn = (state: LedgerState) => { decision: Decision; actor?: string };
@@ -254,7 +266,8 @@ async function pendingEntry(ledger: Ledger, intentId: string): Promise<LedgerEnt
  * Pays an intent whose 'approved' decision is already recorded.
  * - Valid receipt with status 'succeeded'/'pending': payment 'paid' + receipt -> 'paid'.
  * - Valid receipt with status 'failed' (declined): payment 'failed' + receipt -> 'failed'.
- * - adapter.pay throws, or the receipt's intentId/rail/status is wrong (F3): the
+ * - adapter.pay throws, times out (options.payTimeoutMs, F5), or the receipt's
+ *   intentId/rail/status is wrong (F3): the
  *   outcome is unknown, so the payment is recorded 'paid' with a placeholder 'pending'
  *   receipt and needsManualResolve -> 'paid' + needsManualResolve + `error`. The amount
  *   keeps holding the limit; nothing is re-sent; an operator settles it via resolveIntent.
@@ -266,6 +279,7 @@ async function payApproved(
   decision: Decision,
   ledger: Ledger,
   adapter: PaymentAdapter,
+  options: PaymentOptions,
 ): Promise<PaymentResult> {
   const base = { intentId: intent.id, decision };
   const atomic = typeof ledger.markSubmitting === 'function' && typeof ledger.recordPaymentResult === 'function';
@@ -300,8 +314,9 @@ async function payApproved(
   };
   let receipt: Receipt;
   try {
-    receipt = await adapter.pay(structuredClone(intent));
+    receipt = await withTimeout(adapter.pay(structuredClone(intent)), options.payTimeoutMs ?? DEFAULT_PAY_TIMEOUT_MS, 'pay');
   } catch (err) {
+    if (err instanceof AdapterTimeoutError) return unknownOutcome(`${FailureCode.AdapterTimeout}: ${err.message}`);
     const detail = err instanceof Error ? err.message : String(err);
     return unknownOutcome(`${FailureCode.AdapterError}: ${detail}`);
   }

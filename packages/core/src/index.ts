@@ -17,7 +17,8 @@ export type { LedgerEntry, LedgerErrorCode, LedgerFile, LedgerOptions, PaymentOu
 export { resolveIntent, RESOLVE_STATUSES } from './resolve.ts';
 export type { ResolveInput, ResolveResult, ResolveStatus } from './resolve.ts';
 export { FailureCode, PaymentError, approve, reject, runPayment } from './orchestrator.ts';
-export type { ApproveOptions, PaymentErrorCode, PaymentResult, RejectOptions, RunStatus } from './orchestrator.ts';
+export type { ApproveOptions, PaymentErrorCode, PaymentOptions, PaymentResult, RejectOptions, RunStatus } from './orchestrator.ts';
 export { reconcile, refreshIntent } from './reconcile.ts';
-export type { ReconcileSummary, RefreshResult } from './reconcile.ts';
+export type { ReconcileSummary, RefreshResult, StatusOptions } from './reconcile.ts';
+export { AdapterTimeoutError, DEFAULT_PAY_TIMEOUT_MS, DEFAULT_STATUS_TIMEOUT_MS } from './timeout.ts';
 export { CURRENCY_DECIMALS, ceilMinorUnits, currencyDecimals, formatMinor, toMinorUnits } from './money.ts';
