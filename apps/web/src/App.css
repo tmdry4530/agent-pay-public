@@ -622,6 +622,11 @@ dd {
   gap: 0.5rem;
 }
 
+.error-banner__actions .btn-ghost,
+.status-banner .btn-ghost {
+  width: auto;
+}
+
 .skeleton-block {
   min-height: 4.5rem;
 }
@@ -709,10 +714,9 @@ dd {
 
 .intent-flow__header {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.5rem;
-  align-items: baseline;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-start;
   margin-bottom: 0.45rem;
 }
 
@@ -744,7 +748,7 @@ dd {
   display: inline-flex;
   align-items: center;
   gap: 0.15rem;
-  font-size: 0.65rem;
+  font-size: 0.72rem;
   color: var(--muted);
   padding: 0.12rem 0.3rem;
   border-radius: 6px;
