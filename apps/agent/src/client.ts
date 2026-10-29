@@ -16,7 +16,7 @@ export type IntentPaymentResponse = PaymentResult & { intent: { id: string; crea
 
 export interface LedgerResponse {
   entries: LedgerEntry[];
-  today: { day: string; totals: Record<string, number> };
+  today: { day: string; totals: Record<string, Record<string, number>> };
 }
 
 export class ApiClientError extends Error {
