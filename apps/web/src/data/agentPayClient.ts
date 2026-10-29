@@ -51,5 +51,7 @@ export interface AgentPayClient {
   ): Promise<PaymentResult & { changed: true; resolution: ReceiptResolution }>;
   getLedger(): Promise<LedgerSnapshot>;
   getHealth?(): Promise<{ ok: boolean; rail: string }>;
+  /** HTTP client: ms to add to local time so it matches server `Date` (0 when unknown). */
+  serverClockOffsetMs?(): number;
   reset?(): Promise<void>;
 }

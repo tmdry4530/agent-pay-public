@@ -127,6 +127,83 @@ describe('createHttpClient', () => {
     await expect(client.getPolicy()).rejects.toEqual(new ApiError(400, 'invalid_body: bad field'));
   });
 
+  describe('server clock offset from Date header', () => {
+    const base = 'http://127.0.0.1:8787';
+
+    function jsonResponse(
+      body: unknown,
+      init: { ok?: boolean; status?: number; date?: string | null } = {},
+    ): Response {
+      const ok = init.ok ?? true;
+      const status = init.status ?? (ok ? 200 : 409);
+      const headers = new Headers();
+      if (init.date !== null && init.date !== undefined) {
+        headers.set('Date', init.date);
+      }
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' },
+      });
+    }
+
+    it('starts at offset 0', () => {
+      const client = createHttpClient({ baseUrl: base, fetch: vi.fn() });
+      expect(client.serverClockOffsetMs?.()).toBe(0);
+    });
+
+    it('updates offset from valid Date on success', async () => {
+      const localMs = 1_700_000_000_000;
+      const serverMs = localMs + 12_000;
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          { agentId: 'a', perTxMax: 1, dailyMax: 2, allowedPayees: [], requireApprovalAbove: 0 },
+          { date: new Date(serverMs).toUTCString() },
+        ),
+      );
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock, now: () => localMs });
+      await client.getPolicy();
+      expect(client.serverClockOffsetMs?.()).toBe(12_000);
+    });
+
+    it('keeps previous offset when Date is missing or invalid', async () => {
+      const localMs = 1_700_000_000_000;
+      const serverMs = localMs + 5_000;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { agentId: 'a', perTxMax: 1, dailyMax: 2, allowedPayees: [], requireApprovalAbove: 0 },
+            { date: new Date(serverMs).toUTCString() },
+          ),
+        )
+        .mockResolvedValueOnce(jsonResponse({ entries: [], today: { day: '2026-01-01', totals: {} } }, { date: null }))
+        .mockResolvedValueOnce(
+          jsonResponse({ entries: [], today: { day: '2026-01-01', totals: {} } }, { date: 'garbage' }),
+        );
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock, now: () => localMs });
+      await client.getPolicy();
+      expect(client.serverClockOffsetMs?.()).toBe(5_000);
+      await client.getLedger();
+      expect(client.serverClockOffsetMs?.()).toBe(5_000);
+      await client.getLedger();
+      expect(client.serverClockOffsetMs?.()).toBe(5_000);
+    });
+
+    it('captures offset from error responses', async () => {
+      const localMs = 1_700_000_000_000;
+      const serverMs = localMs - 30_000;
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          { error: 'not_pending: already done' },
+          { ok: false, status: 409, date: new Date(serverMs).toUTCString() },
+        ),
+      );
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock, now: () => localMs });
+      await expect(client.getPolicy()).rejects.toBeInstanceOf(ApiError);
+      expect(client.serverClockOffsetMs?.()).toBe(-30_000);
+    });
+  });
+
   describe('409 race error shapes', () => {
     const base = 'http://127.0.0.1:8787';
 

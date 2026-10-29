@@ -2,10 +2,13 @@ import type { PaymentIntent, PaymentResult, Policy, Rail, ReceiptResolution } fr
 import { ApiError } from './apiError';
 import type { AgentPayClient, IntentDraft, LedgerSnapshot } from './agentPayClient';
 import type { ResolveRequest } from './compat';
+import { computeClockOffsetMs } from './serverClock';
 
 export type HttpClientOptions = {
   baseUrl: string;
   fetch?: typeof fetch;
+  /** Local epoch ms when a response is received (default `Date.now`). */
+  now?: () => number;
 };
 
 function trimBase(baseUrl: string): string {
@@ -41,6 +44,17 @@ async function readError(res: Response): Promise<{ message: string; code?: strin
 export function createHttpClient(options: HttpClientOptions): AgentPayClient {
   const base = trimBase(options.baseUrl);
   const fetchFn = options.fetch ?? fetch;
+  const nowFn = options.now ?? Date.now;
+  let clockOffsetMs = 0;
+
+  function captureClockOffset(res: Response): void {
+    // Tolerate minimal fetch stubs without headers (treated as a missing header).
+    const header = typeof res.headers?.get === 'function' ? res.headers.get('Date') : null;
+    const offset = computeClockOffsetMs(header, nowFn());
+    if (offset !== undefined) {
+      clockOffsetMs = offset;
+    }
+  }
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let res: Response;
@@ -62,6 +76,7 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
       }
       throw e;
     }
+    captureClockOffset(res);
     if (!res.ok) {
       const errBody = await readError(res);
       throw new ApiError(
@@ -144,6 +159,10 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
 
     getHealth(): Promise<{ ok: boolean; rail: string }> {
       return request<{ ok: boolean; rail: string }>('/health');
+    },
+
+    serverClockOffsetMs(): number {
+      return clockOffsetMs;
     },
   };
 }

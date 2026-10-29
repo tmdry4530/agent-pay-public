@@ -23,6 +23,7 @@ import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
 import { describeError, type DescribedError } from './data/describeError';
 import { derivePipelineSteps } from './data/intentFlow';
+import { serverNow } from './data/serverClock';
 import { paymentResultFromLedgerEntry } from './data/ledgerResult';
 import { detectRailMismatch, expectedRailFromSearch, railMismatchMessage } from './data/railQuery';
 import { ApiStatusBanner } from './components/ApiStatusBanner';
@@ -210,9 +211,14 @@ export default function App({ clock = systemClock }: AppProps) {
   const perTxMax = policy?.perTxMax ?? 0;
   const requireApprovalAbove = policy?.requireApprovalAbove ?? 0;
 
+  const serverNowDate = useMemo(
+    () => serverNow(now, client.serverClockOffsetMs?.() ?? 0),
+    [now, ledgerSnap, client],
+  );
+
   const timeline = useMemo(
-    () => entriesToTimeline(ledgerSnap?.entries ?? [], now),
-    [ledgerSnap, now],
+    () => entriesToTimeline(ledgerSnap?.entries ?? [], serverNowDate),
+    [ledgerSnap, serverNowDate],
   );
 
   const activeIntentId = intent?.id ?? draft?.id;
@@ -232,8 +238,8 @@ export default function App({ clock = systemClock }: AppProps) {
         : undefined,
     [ledgerSnap?.entries, resolveIntentId],
   );
-  const showResolveForm = Boolean(resolveEntry && needsResolve(resolveEntry, now));
-  const resolveStuck = Boolean(resolveEntry && isStuckSubmitting(resolveEntry, now));
+  const showResolveForm = Boolean(resolveEntry && needsResolve(resolveEntry, serverNowDate));
+  const resolveStuck = Boolean(resolveEntry && isStuckSubmitting(resolveEntry, serverNowDate));
 
   const ledgerHasSubmitting = useMemo(
     () => (ledgerSnap?.entries ?? []).some((e) => e.paymentStatus === 'submitting'),
@@ -968,7 +974,7 @@ export default function App({ clock = systemClock }: AppProps) {
           {!initialLoading && apiConnected && (
             <IntentFlows
               entries={ledgerSnap?.entries ?? []}
-              now={now}
+              now={serverNowDate}
               onOpenResolve={handleOpenResolve}
             />
           )}
