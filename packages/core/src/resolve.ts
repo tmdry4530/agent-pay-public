@@ -34,7 +34,9 @@ function assertValidResolveInput(input: ResolveInput): void {
 }
 
 /**
- * Manually settles a stuck `pending` receipt (operator endpoint POST /intents/:id/resolve).
+ * Manually settles a stuck `pending` receipt, or a payment interrupted while
+ * `submitting` (no receipt; the receipt is built from `submission`, externalId ''
+ * unless `input.externalId` is given) (operator endpoint POST /intents/:id/resolve).
  * Never calls `adapter.pay()` or `adapter.status()`; use when status polling cannot settle
  * (e.g. PayPal `meta.needsManualResolve`, duplicate `sender_batch_id` guesses).
  *
@@ -52,19 +54,23 @@ export async function resolveIntent(
 
   const entry = await ledger.get(intentId);
   if (!entry) throw new PaymentError('intent_not_found', `intent ${intentId} is not recorded`);
-  if (!entry.receipt) {
+  // F4: a payment interrupted while 'submitting' has no receipt; settle it from its submission.
+  const interrupted = entry.paymentStatus === 'submitting' && !entry.receipt && entry.submission;
+  const stored: Receipt | undefined = interrupted
+    ? { intentId, rail: entry.submission!.rail, externalId: '', status: 'pending', at: entry.submission!.at }
+    : entry.receipt;
+  if (!stored) {
     throw new PaymentError('no_receipt', `intent ${intentId} has no receipt stored`);
   }
-  if (entry.receipt.status !== 'pending') {
+  if (stored.status !== 'pending') {
     throw new PaymentError(
       'receipt_not_pending',
-      `intent ${intentId} receipt status is ${entry.receipt.status}, not pending`,
+      `intent ${intentId} receipt status is ${stored.status}, not pending`,
     );
   }
 
   const decision = entry.decision!;
   const base = { intentId, decision };
-  const stored = entry.receipt;
   const at = now().toISOString();
   const resolvedBy = input.resolvedBy;
   const status = input.status;

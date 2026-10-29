@@ -256,22 +256,40 @@ async function payApproved(
   adapter: PaymentAdapter,
 ): Promise<PaymentResult> {
   const base = { intentId: intent.id, decision };
+  const atomic = typeof ledger.markSubmitting === 'function' && typeof ledger.recordPaymentResult === 'function';
+  if (atomic) {
+    // F4: recorded before the rail sees the payment, so a crash mid-pay leaves a
+    // 'submitting' entry (holds the limit, replays as in_progress, settled via resolve).
+    await ledger.markSubmitting(intent.id, adapter.rail).catch((err: unknown) => {
+      if (err instanceof LedgerError && err.code === 'precondition_failed') {
+        throw new PaymentError('in_progress', `intent ${intent.id} is already being paid`);
+      }
+      throw err;
+    });
+  }
+  const settle = async (status: 'paid' | 'failed', receipt?: Receipt): Promise<void> => {
+    if (atomic) {
+      await ledger.recordPaymentResult(intent.id, receipt === undefined ? { status } : { status, receipt });
+      return;
+    }
+    await ledger.recordPayment(intent.id, status);
+    if (receipt !== undefined) await ledger.recordReceipt(intent.id, receipt);
+  };
   let receipt: Receipt;
   try {
     receipt = await adapter.pay(structuredClone(intent));
   } catch (err) {
-    await ledger.recordPayment(intent.id, 'failed');
+    await settle('failed');
     const detail = err instanceof Error ? err.message : String(err);
     return { ...base, status: 'failed', error: `${FailureCode.AdapterError}: ${detail}` };
   }
   const mismatch = receiptMismatch(receipt, intent, adapter);
   if (mismatch) {
-    await ledger.recordPayment(intent.id, 'failed');
+    await settle('failed');
     return { ...base, status: 'failed', error: `${FailureCode.ReceiptMismatch}: ${mismatch}` };
   }
   const failed = receipt.status === 'failed';
-  await ledger.recordPayment(intent.id, failed ? 'failed' : 'paid');
-  await ledger.recordReceipt(intent.id, receipt);
+  await settle(failed ? 'failed' : 'paid', receipt);
   if (failed) {
     return { ...base, status: 'failed', receipt, error: `${FailureCode.PaymentDeclined}: ${adapter.rail} declined ${receipt.externalId}` };
   }
@@ -298,6 +316,11 @@ function replay(entry: LedgerEntry, intent: PaymentIntent): PaymentResult {
   if (decision.status !== 'approved') return { ...base, status: decision.status };
   if (entry.paymentStatus === undefined) {
     throw new PaymentError('in_progress', `intent ${intent.id} is approved but no payment is recorded yet`);
+  }
+  if (entry.paymentStatus === 'submitting') {
+    // Handed to the rail but no outcome stored (in flight, or interrupted). Never re-sent;
+    // an operator settles an interrupted one via resolveIntent.
+    throw new PaymentError('in_progress', `intent ${intent.id} payment is submitting on ${entry.submission?.rail ?? 'its rail'}`);
   }
   const receipt = entry.receipt ? { receipt: entry.receipt } : {};
   if (entry.paymentStatus === 'failed' || entry.receipt?.status === 'failed') {

@@ -3,9 +3,26 @@ import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promis
 import { basename, dirname, join, resolve } from 'node:path';
 import { LedgerError } from './errors.ts';
 import { ceilMinorUnits, currencyDecimals } from './money.ts';
-import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt, ReceiptStatus } from './types.ts';
+import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Rail, Receipt, ReceiptStatus } from './types.ts';
 
-export type PaymentStatus = 'paid' | 'failed';
+/**
+ * 'submitting': recorded just before adapter.pay is called (F4); the outcome is not known
+ * yet. It holds the daily limit, replays as in_progress, is never re-sent automatically,
+ * and an entry stuck in it (crash during pay) is settled by an operator via resolveIntent.
+ */
+export type PaymentStatus = 'paid' | 'failed' | 'submitting';
+
+/** Set by markSubmitting: which rail the payment was handed to, and when. */
+export interface PaymentSubmission {
+  rail: Rail;
+  at: string;
+}
+
+/** Outcome written by recordPaymentResult. */
+export interface PaymentOutcome {
+  status: 'paid' | 'failed';
+  receipt?: Receipt;
+}
 
 export interface ReceiptResolution {
   status: 'succeeded' | 'failed' | 'refunded';
@@ -26,6 +43,8 @@ export interface LedgerEntry {
    */
   decisions: DecisionRecord[];
   paymentStatus?: PaymentStatus;
+  /** Set when the payment was handed to a rail (markSubmitting). Kept after it settles. */
+  submission?: PaymentSubmission;
   receipt?: Receipt;
   /** Set only by a manual operator resolve (POST /intents/:id/resolve). */
   resolution?: ReceiptResolution;
@@ -87,7 +106,8 @@ export function countsTowardDailyTotal(entry: LedgerEntry): boolean {
 const emptyFile = (): LedgerFile => ({ version: 1, entries: [] });
 
 /**
- * JSON-file ledger. Lifecycle per intent: recordIntent -> recordDecision ->
+ * JSON-file ledger. Lifecycle per intent: recordIntent(AndDecide) -> recordDecision/decide
+ * -> markSubmitting -> recordPaymentResult (payment + receipt), or the older
  * recordPayment -> recordReceipt.
  *
  * Every operation re-reads the file, so several Ledger instances on the same
@@ -100,7 +120,7 @@ const emptyFile = (): LedgerFile => ({ version: 1, entries: [] });
  * Taking over a stale lock is best-effort (two processes stealing the same stale
  * lock at the same instant can both proceed); it only matters after a crash.
  *
- * Daily totals bucket by the UTC date of `intent.createdAt`.
+ * Daily totals bucket by the server-clock day the amount was approved (accountingDay).
  */
 export class Ledger {
   readonly filePath: string;
@@ -223,19 +243,15 @@ export class Ledger {
     entry.updatedAt = at;
   }
 
-  /** Records the payment outcome. Requires an 'approved' decision and no prior payment. */
+  /**
+   * Records the payment outcome. Requires an 'approved' decision and either no payment
+   * yet or 'submitting' (then only 'paid'/'failed'). Prefer recordPaymentResult, which
+   * also stores the receipt in the same write.
+   */
   recordPayment(intentId: string, status: PaymentStatus): Promise<LedgerEntry> {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
-      if (entry.decision?.status !== 'approved') {
-        throw new LedgerError(
-          'precondition_failed',
-          `intent ${intentId} cannot be paid: decision is ${entry.decision?.status ?? 'missing'}`,
-        );
-      }
-      if (entry.paymentStatus !== undefined) {
-        throw new LedgerError('precondition_failed', `intent ${intentId} already has payment status ${entry.paymentStatus}`);
-      }
+      assertPayable(entry, status);
       entry.paymentStatus = status;
       entry.updatedAt = this.#now().toISOString();
       return entry;
@@ -243,10 +259,56 @@ export class Ledger {
   }
 
   /**
+   * Marks an approved, unpaid intent as handed to `rail` (paymentStatus 'submitting',
+   * `submission` = { rail, at }). Called just before adapter.pay. Compare-and-set: throws
+   * LedgerError precondition_failed unless the decision is 'approved' and no payment is
+   * recorded, so a payment can be submitted at most once.
+   */
+  markSubmitting(intentId: string, rail: Rail): Promise<LedgerEntry> {
+    return this.#mutate((file) => {
+      const entry = find(file, intentId);
+      assertPayable(entry, 'submitting');
+      const at = this.#now().toISOString();
+      entry.paymentStatus = 'submitting';
+      entry.submission = { rail, at };
+      entry.updatedAt = at;
+      return entry;
+    });
+  }
+
+  /**
+   * Writes the payment outcome and its receipt (when given) in ONE write. Requires
+   * paymentStatus 'submitting' (or an approved entry with no payment yet). The receipt
+   * follows the recordReceipt first-receipt rules; a 'failed' receipt makes the payment
+   * 'failed'. Throws LedgerError precondition_failed / invalid_input; a throw writes nothing.
+   */
+  recordPaymentResult(intentId: string, outcome: PaymentOutcome): Promise<LedgerEntry> {
+    return this.#mutate((file) => {
+      const entry = find(file, intentId);
+      if (entry.paymentStatus !== 'submitting') assertPayable(entry, outcome.status);
+      if (outcome.status !== 'paid' && outcome.status !== 'failed') {
+        throw new LedgerError('invalid_input', `payment outcome must be paid or failed, got ${String(outcome.status)}`);
+      }
+      entry.paymentStatus = outcome.status;
+      if (outcome.receipt !== undefined) {
+        if (outcome.receipt.intentId !== intentId) {
+          throw new LedgerError('invalid_input', `receipt intentId ${outcome.receipt.intentId} does not match ${intentId}`);
+        }
+        assertReceiptTransition(entry, outcome.receipt.status);
+        entry.receipt = { ...outcome.receipt };
+        if (outcome.receipt.status === 'failed') entry.paymentStatus = 'failed';
+      }
+      entry.updatedAt = this.#now().toISOString();
+      return entry;
+    });
+  }
+
+  /**
    * Settles a pending receipt (compare-and-set). Requires `paymentStatus === 'paid'`
-   * and the current receipt status `pending`. Replaces the receipt; when the new
-   * status is `failed`, also sets `paymentStatus` to `failed` (same as payApproved).
-   * Throws LedgerError on mismatch or if the receipt is not pending.
+   * and the current receipt status `pending`, or `paymentStatus === 'submitting'` with
+   * no receipt (an interrupted submission settled by resolveIntent). Replaces the
+   * receipt and sets `paymentStatus` to `failed` when the new status is `failed`, else
+   * `paid`. Throws LedgerError on mismatch or if the receipt is not pending.
    */
   settleReceipt(intentId: string, receipt: Receipt, resolution?: ReceiptResolution): Promise<LedgerEntry> {
     return this.#mutate((file) => {
@@ -254,20 +316,24 @@ export class Ledger {
       if (receipt.intentId !== intentId) {
         throw new LedgerError('invalid_input', `receipt intentId ${receipt.intentId} does not match ${intentId}`);
       }
-      if (entry.paymentStatus !== 'paid') {
+      const interrupted = entry.paymentStatus === 'submitting' && entry.receipt === undefined;
+      if (!interrupted && entry.paymentStatus !== 'paid') {
         throw new LedgerError(
           'precondition_failed',
           `intent ${intentId} cannot settle receipt: payment status is ${entry.paymentStatus ?? 'missing'}`,
         );
       }
-      if (entry.receipt?.status !== 'pending') {
+      if (interrupted && receipt.status === 'pending') {
+        throw new LedgerError('invalid_input', `intent ${intentId}: a submitting payment must settle to a final status`);
+      }
+      if (!interrupted && entry.receipt?.status !== 'pending') {
         throw new LedgerError(
           'precondition_failed',
           `intent ${intentId} receipt is not pending (status is ${entry.receipt?.status ?? 'missing'})`,
         );
       }
       entry.receipt = { ...receipt };
-      if (receipt.status === 'failed') entry.paymentStatus = 'failed';
+      entry.paymentStatus = receipt.status === 'failed' ? 'failed' : 'paid';
       if (resolution !== undefined) entry.resolution = { ...resolution };
       entry.updatedAt = this.#now().toISOString();
       return entry;
@@ -289,6 +355,9 @@ export class Ledger {
       }
       if (entry.paymentStatus === undefined) {
         throw new LedgerError('precondition_failed', `intent ${intentId} has no payment recorded`);
+      }
+      if (entry.paymentStatus === 'submitting') {
+        throw new LedgerError('precondition_failed', `intent ${intentId} is submitting; use recordPaymentResult or settleReceipt`);
       }
       assertReceiptTransition(entry, receipt.status);
       entry.receipt = { ...receipt };
@@ -482,7 +551,7 @@ function corrupt(filePath: string, problem: string): LedgerError {
   );
 }
 
-const PAYMENT_STATUSES: readonly string[] = ['paid', 'failed'] satisfies PaymentStatus[];
+const PAYMENT_STATUSES: readonly string[] = ['paid', 'failed', 'submitting'] satisfies PaymentStatus[];
 const DECISION_STATUSES: readonly string[] = ['approved', 'rejected', 'needs_approval'];
 const RECEIPT_STATUSES: readonly string[] = ['succeeded', 'pending', 'failed', 'refunded'];
 
@@ -524,6 +593,10 @@ function ledgerFileProblem(json: unknown): string | undefined {
     }
     if (e.paymentStatus !== undefined && !PAYMENT_STATUSES.includes(e.paymentStatus as string)) {
       return `${at}.paymentStatus ${JSON.stringify(e.paymentStatus)} is unknown`;
+    }
+    if (e.submission !== undefined) {
+      const sub = e.submission;
+      if (!isObject(sub) || typeof sub.rail !== 'string' || !isDate(sub.at)) return `${at}.submission must have a rail and a valid at`;
     }
     if (e.receipt !== undefined) {
       const r = e.receipt;
@@ -584,6 +657,17 @@ function assertDecidable(entry: LedgerEntry, ifStatus: DecisionStatus | undefine
   if (ifStatus !== undefined && entry.decision?.status !== ifStatus) {
     throw new LedgerError('precondition_failed', `intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${ifStatus}`);
   }
+}
+
+/** Payment preconditions: an approved decision and no payment yet ('submitting' may become paid/failed). */
+function assertPayable(entry: LedgerEntry, next: PaymentStatus): void {
+  const intentId = entry.intent.id;
+  if (entry.decision?.status !== 'approved') {
+    throw new LedgerError('precondition_failed', `intent ${intentId} cannot be paid: decision is ${entry.decision?.status ?? 'missing'}`);
+  }
+  if (entry.paymentStatus === undefined) return;
+  if (entry.paymentStatus === 'submitting' && next !== 'submitting') return;
+  throw new LedgerError('precondition_failed', `intent ${intentId} already has payment status ${entry.paymentStatus}`);
 }
 
 /**
