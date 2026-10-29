@@ -1,5 +1,6 @@
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import type { Decision, DecisionRecord, LedgerEntry } from '@agent-pay/core';
+import { isSubmitting, needsManualResolve, reasonInfo, failureInfo, manualResolveErrorFromEntry } from './compat';
 
 export type TimelineEventKind = 'intent' | 'decision' | 'payment' | 'receipt' | 'resolution';
 
@@ -12,6 +13,8 @@ export type TimelineEvent = {
   kind?: TimelineEventKind;
   /** Present on manual resolution events (operator resolve). */
   previousExternalId?: string;
+  /** Warning styling in the ledger list. */
+  warn?: boolean;
 };
 
 /** Lifecycle tie-break when two events share the same `at` within one intent (higher = newer in UI). */
@@ -56,6 +59,7 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
 
     const records = decisionRecords(entry);
     records.forEach((record, i) => {
+      const info = reasonInfo(record.reason);
       events.push({
         id: `${intentId}-decision-${i}`,
         at: record.at ?? entry.updatedAt,
@@ -64,10 +68,31 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
         actor: record.actor,
         kind: 'decision',
         sortSeq: SEQ.decision(i),
+        ...(info.explanation ? { warn: info.code === 'invalid_policy' } : {}),
       });
     });
 
-    if (entry.paymentStatus === 'paid') {
+    if (isSubmitting(entry)) {
+      events.push({
+        id: `${intentId}-submitting`,
+        at: entry.updatedAt,
+        label: 'payment submitting',
+        kind: 'payment',
+        sortSeq: SEQ.payment - 1,
+      });
+    } else if (needsManualResolve(entry)) {
+      const err = manualResolveErrorFromEntry(entry);
+      const info = failureInfo(err);
+      events.push({
+        id: `${intentId}-paid-uncertain`,
+        at: entry.updatedAt,
+        label: 'payment needs check (pending)',
+        detail: `${info.label}. ${info.explanation}`,
+        kind: 'payment',
+        sortSeq: SEQ.payment,
+        warn: true,
+      });
+    } else if (entry.paymentStatus === 'paid') {
       events.push({
         id: `${intentId}-paid`,
         at: entry.updatedAt,
@@ -86,14 +111,28 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
     }
 
     if (entry.receipt) {
-      events.push({
-        id: `${intentId}-receipt`,
-        at: entry.receipt.at,
-        label: `receipt ${entry.receipt.status}`,
-        detail: `${entry.receipt.rail} · ${entry.receipt.externalId}`,
-        kind: 'receipt',
-        sortSeq: SEQ.receipt,
-      });
+      if (needsManualResolve(entry)) {
+        const err = manualResolveErrorFromEntry(entry);
+        const info = failureInfo(err);
+        events.push({
+          id: `${intentId}-receipt-manual`,
+          at: entry.receipt.at,
+          label: 'payment needs check (pending)',
+          detail: `${info.label}. ${info.explanation}`,
+          kind: 'receipt',
+          sortSeq: SEQ.receipt,
+          warn: true,
+        });
+      } else {
+        events.push({
+          id: `${intentId}-receipt`,
+          at: entry.receipt.at,
+          label: `receipt ${entry.receipt.status}`,
+          detail: `${entry.receipt.rail} · ${entry.receipt.externalId}`,
+          kind: 'receipt',
+          sortSeq: SEQ.receipt,
+        });
+      }
     }
 
     if (entry.resolution) {

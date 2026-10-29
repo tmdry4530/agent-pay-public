@@ -1,5 +1,6 @@
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import type { DecisionRecord, LedgerEntry } from '@agent-pay/core';
+import { isSubmitting, isSubmittingResult, needsManualResolve, NEEDS_CHECK_PENDING_LABEL } from './compat';
 import type { PaymentResult, PipelineStep } from '../types';
 
 export const PENDING_SLOW_MS = 30_000;
@@ -14,11 +15,14 @@ export type FlowStageState =
   | 'rejected'
   | 'failed'
   | 'pending'
+  | 'attention'
   | 'upcoming';
 
 export type IntentFlowOverall =
   | 'paid'
   | 'pending'
+  | 'submitting'
+  | 'needs_manual_resolve'
   | 'awaiting_approval'
   | 'rejected_by_policy'
   | 'rejected_by_human'
@@ -71,6 +75,8 @@ function overallLabel(overall: IntentFlowOverall): string {
   const map: Record<IntentFlowOverall, string> = {
     paid: 'Paid',
     pending: 'Pending receipt',
+    submitting: 'Submitting payment',
+    needs_manual_resolve: 'Needs check (pending)',
     awaiting_approval: 'Awaiting approval',
     rejected_by_policy: 'Rejected by policy',
     rejected_by_human: 'Rejected by human',
@@ -167,29 +173,17 @@ export function deriveIntentFlow(entry: LedgerEntry): IntentFlowView {
     receiptState = 'done';
   }
 
-  const approvalStage: FlowStage = {
-    id: 'approval',
-    state: approvalState,
-    label: STAGE_LABELS.approval,
-  };
-
-  const paymentStage: FlowStage = {
-    id: 'payment',
-    state: paymentState,
-    label: STAGE_LABELS.payment,
-    detail: entry.paymentStatus,
-  };
-
-  const receiptStage: FlowStage = {
-    id: 'receipt',
-    state: receiptState,
-    label: STAGE_LABELS.receipt,
-    detail: entry.receipt?.status ?? entry.resolution?.status,
-  };
-
   let overall: IntentFlowOverall = 'paid';
   if (entry.resolution) {
     overall = 'resolved';
+  } else if (needsManualResolve(entry)) {
+    paymentState = 'pending';
+    receiptState = 'attention';
+    overall = 'needs_manual_resolve';
+  } else if (isSubmitting(entry)) {
+    paymentState = 'current';
+    receiptState = 'upcoming';
+    overall = 'submitting';
   } else if (terminal === 'policy_reject') {
     overall = 'rejected_by_policy';
   } else if (terminal === 'human_reject') {
@@ -203,6 +197,26 @@ export function deriveIntentFlow(entry: LedgerEntry): IntentFlowView {
   } else if (entry.paymentStatus === 'paid' && entry.receipt?.status === 'succeeded') {
     overall = 'paid';
   }
+
+  const paymentStage: FlowStage = {
+    id: 'payment',
+    state: paymentState,
+    label: STAGE_LABELS.payment,
+    detail: isSubmitting(entry) ? 'submitting' : entry.paymentStatus,
+  };
+
+  const receiptStage: FlowStage = {
+    id: 'receipt',
+    state: receiptState,
+    label: STAGE_LABELS.receipt,
+    detail: entry.receipt?.status ?? entry.resolution?.status,
+  };
+
+  const approvalStage: FlowStage = {
+    id: 'approval',
+    state: approvalState,
+    label: STAGE_LABELS.approval,
+  };
 
   return {
     stages: [intentStage, policyStage, approvalStage, paymentStage, receiptStage],
@@ -223,6 +237,13 @@ export type PipelineStepView = {
   step: PipelineStep;
   state: PipelineStepState;
   label: string;
+  /** Payment in flight: pending step still marked as the active pipeline step. */
+  ariaCurrent?: boolean;
+};
+
+export type DerivePipelineStepsOptions = {
+  payInFlight?: boolean;
+  ledgerSubmitting?: boolean;
 };
 
 const PIPELINE_ORDER: PipelineStep[] = [
@@ -262,7 +283,40 @@ function activeStepIndex(step: PipelineStep, result: PaymentResult | null): numb
 export function derivePipelineSteps(
   step: PipelineStep,
   result: PaymentResult | null,
+  options: DerivePipelineStepsOptions = {},
 ): PipelineStepView[] {
+  const paymentInFlight =
+    options.payInFlight ||
+    options.ledgerSubmitting ||
+    (result != null && isSubmittingResult(result));
+
+  if (paymentInFlight) {
+    const paymentIdx = PIPELINE_ORDER.indexOf('payment');
+    const approvalSkipped =
+      result != null &&
+      result.status !== 'needs_approval' &&
+      result.status !== 'rejected' &&
+      reasonCode(result.decision) !== ReasonCode.RejectedByHuman;
+
+    return PIPELINE_ORDER.map((s, i) => {
+      if (s === 'payment') {
+        return {
+          step: s,
+          state: 'pending' as PipelineStepState,
+          label: PIPELINE_LABELS[s],
+          ariaCurrent: true,
+        };
+      }
+      let state: PipelineStepState = 'upcoming';
+      if (s === 'approval' && approvalSkipped && i < paymentIdx) {
+        state = 'skipped';
+      } else if (i < paymentIdx) {
+        state = 'done';
+      }
+      return { step: s, state, label: PIPELINE_LABELS[s] };
+    });
+  }
+
   const currentIdx = activeStepIndex(step, result);
   const approvalSkipped =
     result != null &&
@@ -292,6 +346,9 @@ export function derivePipelineSteps(
     if (s === 'receipt' && result?.receipt?.status === 'pending' && i === currentIdx) {
       state = 'pending';
     }
+    if (result && needsManualResolve(result) && (s === 'payment' || s === 'receipt') && i >= currentIdx) {
+      state = 'pending';
+    }
     if (s === 'approval' && result?.status === 'needs_approval' && i === currentIdx) {
       state = 'current';
     }
@@ -304,7 +361,23 @@ export function derivePipelineSteps(
     }
 
     return { step: s, state, label: PIPELINE_LABELS[s] };
+  }).map((view) => {
+    if (result && needsManualResolve(result) && (view.step === 'payment' || view.step === 'receipt')) {
+      return { ...view, label: NEEDS_CHECK_PENDING_LABEL };
+    }
+    return view;
   });
+}
+
+export function pipelinePaymentInFlight(
+  result: PaymentResult | null,
+  options: DerivePipelineStepsOptions = {},
+): boolean {
+  return (
+    !!options.payInFlight ||
+    !!options.ledgerSubmitting ||
+    (result != null && isSubmittingResult(result))
+  );
 }
 
 export function stepperIcon(state: PipelineStepState): string {
@@ -353,6 +426,8 @@ export function compactStageIcon(state: FlowStageState): string {
     case 'pending':
     case 'waiting':
       return '…';
+    case 'attention':
+      return '!';
     case 'current':
       return '●';
     default:

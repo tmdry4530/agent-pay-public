@@ -12,9 +12,18 @@ export type { Rail };
 export type IntentDraft = Omit<PaymentIntent, 'id' | 'createdAt'> &
   Partial<Pick<PaymentIntent, 'id' | 'createdAt'>>;
 
+export type LedgerTodayTotals =
+  | Record<string, number>
+  | Record<string, Record<string, number>>
+  | Record<string, number | Record<string, number>>;
+
 export type LedgerSnapshot = {
   entries: LedgerEntry[];
-  today: { day: string; totals: Record<string, number> };
+  today: {
+    day: string;
+    totals: LedgerTodayTotals;
+    totalsByCurrency?: Record<string, Record<string, number>>;
+  };
 };
 
 export interface AgentPayClient {

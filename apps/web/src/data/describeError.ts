@@ -1,11 +1,15 @@
 import { ApiError, apiErrorCode } from './apiError';
+import { isAlreadyProcessed, type AlreadyProcessedOptions } from './compat';
 
 export type DescribedErrorKind =
   | 'network'
   | 'client'
   | 'server'
   | 'rail_mismatch'
+  | 'already_processed'
   | 'unknown';
+
+export type DescribeErrorContext = AlreadyProcessedOptions;
 
 export type DescribedError = {
   kind: DescribedErrorKind;
@@ -23,7 +27,20 @@ function splitMessage(message: string): { code: string; detail: string } {
   return { code: message.slice(0, i).trim(), detail: message.slice(i + 1).trim() };
 }
 
-export function describeError(err: unknown): DescribedError {
+export function describeError(err: unknown, context: DescribeErrorContext = {}): DescribedError {
+  if (isAlreadyProcessed(err, context)) {
+    return {
+      kind: 'already_processed',
+      status: err instanceof ApiError ? err.status : 409,
+      code: apiErrorCode(err) ?? 'not_pending',
+      title: 'Already processed',
+      message:
+        'This intent was already approved or rejected by someone else. Showing the latest state.',
+      hint: '',
+      retryable: false,
+    };
+  }
+
   if (err instanceof ApiError) {
     const { code, detail } = splitMessage(err.message);
     if (code === 'rail_mismatch' || err.message.includes('rail_mismatch')) {

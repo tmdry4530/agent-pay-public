@@ -2,12 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { apiErrorCode } from './data/apiError';
+import {
+  dailyTotalForAgent,
+  displayRunStatus,
+  failureInfo,
+  isAlreadyProcessed,
+  isSubmitting,
+  manualResolveBannerText,
+  needsManualResolve,
+  normalizeTotals,
+  reasonInfo,
+  showReasonLabelForDecision,
+} from './data/compat';
 import type { IntentDraft } from './data/agentPayClient';
 import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
 import { describeError, type DescribedError } from './data/describeError';
 import { derivePipelineSteps } from './data/intentFlow';
-import { expectedRailFromSearch, railMismatchMessage } from './data/railQuery';
+import { paymentResultFromLedgerEntry } from './data/ledgerResult';
+import { detectRailMismatch, expectedRailFromSearch, railMismatchMessage } from './data/railQuery';
 import { ApiStatusBanner } from './components/ApiStatusBanner';
 import { ErrorBanner } from './components/ErrorBanner';
 import { IntentFlows } from './components/IntentFlows';
@@ -30,10 +43,14 @@ import './App.css';
 const DEFAULT_APPROVER = 'demo-operator';
 
 function formatMoney(amount: number, currency: string): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency,
-  }).format(amount);
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+    }).format(amount);
+  } catch {
+    return `${amount} ${currency}`;
+  }
 }
 
 function formatTime(iso: string): string {
@@ -59,6 +76,12 @@ function splitReason(reason: string): { code: string; detail: string } {
   return { code: reason.slice(0, i), detail: reason.slice(i + 1).trim() };
 }
 
+function stepFromResult(out: PaymentResult): PipelineStep {
+  if (out.status === 'needs_approval') return 'approval';
+  if (out.receipt) return 'receipt';
+  return 'decision';
+}
+
 function paymentErrorCode(err: unknown): string | undefined {
   if (err instanceof PaymentError) return err.code;
   return apiErrorCode(err);
@@ -80,6 +103,7 @@ export default function App() {
   const [step, setStep] = useState<PipelineStep>('task');
   const [actionError, setActionError] = useState<DescribedError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [payInFlight, setPayInFlight] = useState(false);
   const [serverRail, setServerRail] = useState<string | null>(null);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [refreshHidden, setRefreshHidden] = useState(false);
@@ -148,7 +172,25 @@ export default function App() {
 
   const currency = policy?.currency ?? 'USD';
   const agentId = policy?.agentId ?? 'demo-agent';
-  const spentToday = ledgerSnap?.today.totals[agentId] ?? 0;
+  const spentToday = dailyTotalForAgent(ledgerSnap?.today, {
+    agentId,
+    fallbackCurrency: currency,
+    currency,
+  });
+  const totalsByCurrency = useMemo(() => {
+    const map = normalizeTotals(ledgerSnap?.today, { agentId, fallbackCurrency: currency });
+    const rows = Object.entries(map).filter(([, amount]) => amount !== 0);
+    rows.sort(([a], [b]) => {
+      const aKey = a.toUpperCase();
+      const bKey = b.toUpperCase();
+      const policyCur = currency.toUpperCase();
+      if (aKey === policyCur && bKey !== policyCur) return -1;
+      if (bKey === policyCur && aKey !== policyCur) return 1;
+      return aKey.localeCompare(bKey);
+    });
+    return rows;
+  }, [ledgerSnap?.today, agentId, currency]);
+  const showTotalsByCurrency = totalsByCurrency.length > 1;
   const dailyMax = policy?.dailyMax ?? 0;
   const perTxMax = policy?.perTxMax ?? 0;
   const requireApprovalAbove = policy?.requireApprovalAbove ?? 0;
@@ -158,9 +200,25 @@ export default function App() {
     [ledgerSnap],
   );
 
-  const pipelineSteps = useMemo(() => derivePipelineSteps(step, result), [step, result]);
+  const activeIntentId = intent?.id ?? draft?.id;
+  const currentLedgerEntry = useMemo(
+    () =>
+      activeIntentId
+        ? ledgerSnap?.entries.find((e) => e.intent.id === activeIntentId)
+        : undefined,
+    [ledgerSnap?.entries, activeIntentId],
+  );
 
-  const currentIdx = pipelineSteps.findIndex((s) => s.state === 'current');
+  const pipelineSteps = useMemo(
+    () =>
+      derivePipelineSteps(step, result, {
+        payInFlight,
+        ledgerSubmitting: currentLedgerEntry ? isSubmitting(currentLedgerEntry) : false,
+      }),
+    [step, result, payInFlight, currentLedgerEntry],
+  );
+
+  const currentIdx = pipelineSteps.findIndex((s) => s.state === 'current' || s.ariaCurrent);
   const currentStepView = pipelineSteps[currentIdx >= 0 ? currentIdx : 0]!;
   const mobileExtra =
     currentStepView.state === 'skipped'
@@ -173,11 +231,33 @@ export default function App() {
   const mobileLabel = `Step ${(currentIdx >= 0 ? currentIdx : 0) + 1} of ${pipelineSteps.length} · ${currentStepView.label}${mobileExtra}`;
 
   useEffect(() => {
-    const el = stepperRef.current?.querySelector('.stepper__step.is-current');
+    const el = stepperRef.current?.querySelector('.stepper__step.is-current, .stepper__step.is-pending[aria-current="step"]');
     if (el && 'scrollIntoView' in el && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
     }
-  }, [currentStepView.step]);
+  }, [currentStepView.step, payInFlight]);
+
+  useEffect(() => {
+    if (!payInFlight) return;
+    const timer = window.setInterval(() => {
+      void refreshLedger();
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [payInFlight, refreshLedger]);
+
+  const syncIntentFromLedger = useCallback(
+    async (intentId: string) => {
+      const snap = await client.getLedger();
+      setLedgerSnap(snap);
+      const entry = snap.entries.find((e) => e.intent.id === intentId);
+      if (!entry) return;
+      setIntent(entry.intent);
+      const out = paymentResultFromLedgerEntry(entry);
+      setResult(out);
+      setStep(stepFromResult(out));
+    },
+    [client],
+  );
 
   const clearRun = useCallback(() => {
     setDraft(null);
@@ -215,6 +295,7 @@ export default function App() {
   const handlePolicyPay = async () => {
     if (!draft) return;
     setBusy(true);
+    setPayInFlight(true);
     setActionError(null);
     setRefreshNote(null);
     setRefreshHidden(false);
@@ -233,6 +314,7 @@ export default function App() {
     } catch (e) {
       setActionError(describeError(e));
     } finally {
+      setPayInFlight(false);
       setBusy(false);
     }
   };
@@ -240,6 +322,7 @@ export default function App() {
   const handleApprove = async () => {
     if (!intent) return;
     setBusy(true);
+    setPayInFlight(true);
     setActionError(null);
     setRefreshNote(null);
     setRefreshHidden(false);
@@ -250,8 +333,14 @@ export default function App() {
       setStep(out.receipt ? 'receipt' : 'decision');
       await refreshLedger();
     } catch (e) {
-      setActionError(describeError(e));
+      if (isAlreadyProcessed(e, { action: 'approve' })) {
+        setActionError(describeError(e, { action: 'approve' }));
+        await syncIntentFromLedger(intent.id);
+      } else {
+        setActionError(describeError(e));
+      }
     } finally {
+      setPayInFlight(false);
       setBusy(false);
     }
   };
@@ -266,7 +355,12 @@ export default function App() {
       setStep('decision');
       await refreshLedger();
     } catch (e) {
-      setActionError(describeError(e));
+      if (isAlreadyProcessed(e, { action: 'reject' })) {
+        setActionError(describeError(e, { action: 'reject' }));
+        await syncIntentFromLedger(intent.id);
+      } else {
+        setActionError(describeError(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -328,6 +422,11 @@ export default function App() {
   const humanOutcome =
     decision && humanOutcomeText(decision.reason, DEFAULT_APPROVER);
   const reasonParts = decision ? splitReason(decision.reason) : null;
+  const reasonMeta = decision ? reasonInfo(decision.reason) : null;
+  const manualResolvePending =
+    result?.receipt?.status === 'pending' &&
+    (needsManualResolve(result) ||
+      (currentLedgerEntry !== undefined && needsManualResolve(currentLedgerEntry)));
   const canReset = client.kind === 'mock' && client.reset !== undefined;
 
   const headerBadge =
@@ -344,27 +443,15 @@ export default function App() {
     : null;
 
   const pipelineDisabled = !apiConnected || busy;
-  const railMismatch =
-    client.kind === 'http' &&
-    expectedRail &&
-    serverRail !== null &&
-    serverRail !== expectedRail;
-  const railMismatchMsg =
-    railMismatch && expectedRail
-      ? railMismatchMessage(apiBase, serverRail!, expectedRail)
-      : null;
-
-  const receiptRailMismatch =
-    client.kind === 'http' &&
-    serverRail &&
-    result?.receipt &&
-    result.receipt.rail !== serverRail;
-
-  const showRailBanner =
-    railMismatchMsg ||
-    (receiptRailMismatch
-      ? railMismatchMessage(apiBase, serverRail!, result!.receipt!.rail as Rail)
-      : null);
+  const railMismatch = detectRailMismatch({
+    clientKind: client.kind,
+    expected: expectedRail,
+    serverRail,
+    receiptRail: result?.receipt?.rail ?? null,
+  });
+  const showRailBanner = railMismatch
+    ? railMismatchMessage(apiBase, railMismatch.server, railMismatch.expected)
+    : null;
 
   const payBlocked = pipelineDisabled || !!showRailBanner;
 
@@ -555,19 +642,39 @@ export default function App() {
               <h3>Decision</h3>
               {result && (
                 <span
-                  className={`result-badge status-${result.status}`}
+                  className={`result-badge status-${result.status}${manualResolvePending ? ' status-needs-check' : ''}`}
                   data-testid="result-status"
                   aria-live="polite"
                 >
-                  {result.status.replace('_', ' ')}
+                  {displayRunStatus(result, currentLedgerEntry) ?? result.status.replace('_', ' ')}
                 </span>
               )}
               <p className="decision-status">{decision.status.replace('_', ' ')}</p>
               {reasonParts && (
                 <>
                   <p className="reason-code">{reasonParts.code}</p>
+                  {reasonMeta && showReasonLabelForDecision(reasonMeta.code) && (
+                    <p className="reason-label" data-testid="reason-label">
+                      {reasonMeta.label}
+                    </p>
+                  )}
+                  {reasonMeta?.explanation && (
+                    <p className="reason-explanation hint" data-testid="reason-explanation">
+                      {reasonMeta.explanation}
+                    </p>
+                  )}
                   {reasonParts.detail && <p>{reasonParts.detail}</p>}
                 </>
+              )}
+              {result?.status === 'failed' && result.error && (
+                <p className="failure-detail hint" data-testid="payment-failure-detail">
+                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
+                </p>
+              )}
+              {manualResolvePending && result?.error && (
+                <p className="failure-detail hint" data-testid="payment-failure-detail">
+                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
+                </p>
               )}
               {humanOutcome && (
                 <p className="human-outcome" data-testid="human-outcome">
@@ -583,7 +690,13 @@ export default function App() {
                 <span className="mock-badge mock-badge--inline">MOCK — no real funds</span>
               )}
               <h3>Receipt</h3>
-              {result.receipt.status === 'pending' && (
+              {manualResolvePending && (
+                <div className="manual-resolve status-banner status-banner--warn" data-testid="manual-resolve" role="status">
+                  <p className="status-banner__title">Needs check (pending)</p>
+                  <p className="hint">{manualResolveBannerText(result.error)}</p>
+                </div>
+              )}
+              {result.receipt.status === 'pending' && !manualResolvePending && (
                 <p className="receipt-pending-notice" role="status">
                   PENDING — awaiting rail confirmation
                 </p>
@@ -611,10 +724,10 @@ export default function App() {
                   <dd>{formatTime(result.receipt.at)}</dd>
                 </div>
               </dl>
-              {result.receipt.status === 'pending' && (
+              {result.receipt.status === 'pending' && !manualResolvePending && (
                 <PendingTimer sinceIso={result.receipt.at} />
               )}
-              {result.receipt.status === 'pending' && !refreshHidden && (
+              {result.receipt.status === 'pending' && !refreshHidden && !manualResolvePending && (
                 <ActionButton
                   className="btn-ghost btn-refresh"
                   data-testid="btn-refresh"
@@ -659,6 +772,22 @@ export default function App() {
                   <span>Spent today {formatMoney(spentToday, currency)}</span>
                   <span>Daily max {formatMoney(dailyMax, currency)}</span>
                 </p>
+                {showTotalsByCurrency && (
+                  <dl className="totals-by-currency" data-testid="totals-by-currency">
+                    <dt>Today by currency</dt>
+                    {totalsByCurrency.map(([cur, amount]) => (
+                      <div key={cur}>
+                        <dt>{cur}</dt>
+                        <dd>{formatMoney(amount, cur)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {showTotalsByCurrency && (
+                  <p className="hint totals-by-currency-note">
+                    Daily limits apply to the policy currency only ({currency}).
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -681,12 +810,20 @@ export default function App() {
                     key={ev.id}
                     data-testid="ledger-event"
                     data-kind={ev.kind ?? 'intent'}
+                    className={ev.warn ? 'ledger-item--warn' : undefined}
                   >
                     <span className="ledger-type">{ev.label}</span>
                     <span className="ledger-time">{formatTime(ev.at)}</span>
                     {ev.detail && (
                       <span className="ledger-detail wrap-anywhere">{ev.detail}</span>
                     )}
+                    {ev.kind === 'decision' &&
+                      ev.detail &&
+                      showReasonLabelForDecision(reasonInfo(ev.detail).code) && (
+                        <span className="sr-only" data-testid="reason-label">
+                          {reasonInfo(ev.detail).label}
+                        </span>
+                      )}
                     {ev.actor && (
                       <span className="ledger-actor" data-testid="ledger-actor">
                         by {ev.actor}

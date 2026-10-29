@@ -1,6 +1,7 @@
 import type { LedgerEntry, Rail, Receipt, ReceiptResolution } from '@agent-pay/core';
 import type { PaymentAdapter } from '@agent-pay/core';
 import { FailureCode, PaymentError, type PaymentResult } from '@agent-pay/core/orchestrator.ts';
+import { needsManualResolve } from './compat';
 import { MemoryLedgerError } from './memoryLedger';
 
 export type RefreshResult = PaymentResult & { changed: boolean };
@@ -51,6 +52,10 @@ export async function refreshIntent(
       'receipt_not_pending',
       `intent ${intentId} receipt status is ${entry.receipt.status}, not pending`,
     );
+  }
+  if (needsManualResolve(entry) && !entry.receipt.externalId) {
+    const decision = entry.decision!;
+    return { intentId, decision, status: 'paid', receipt: entry.receipt, changed: false };
   }
   if (adapter.status === undefined || entry.receipt.rail !== adapter.rail) {
     throw new PaymentError(

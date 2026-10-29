@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEMO_SCENARIOS } from '../../types';
 import { DEMO_POLICY, createInMemoryClient } from '../inMemoryClient';
 import type { IntentDraft } from '../agentPayClient';
+import { normalizeTotals } from '../compat';
 import { MemoryLedger } from '../memoryLedger';
 import { refreshIntent } from '../refreshIntent';
 
@@ -22,6 +23,15 @@ describe('refreshIntent (in-memory client)', () => {
     };
   }
 
+  function agentTotal(snap: Awaited<ReturnType<ReturnType<typeof createInMemoryClient>['getLedger']>>): number {
+    return (
+      normalizeTotals(snap.today, {
+        agentId: DEMO_POLICY.agentId,
+        fallbackCurrency: 'USD',
+      }).USD ?? 0
+    );
+  }
+
   it('pending -> refresh unchanged -> refresh changed succeeded; gauge unchanged', async () => {
     idCounter = 0;
     const client = createInMemoryClient({
@@ -31,7 +41,7 @@ describe('refreshIntent (in-memory client)', () => {
     });
     const out = await client.submitIntent(draft(DEMO_SCENARIOS[0]!.task), 'mock');
     expect(out.receipt?.status).toBe('pending');
-    const before = (await client.getLedger()).today.totals[DEMO_POLICY.agentId];
+    const before = agentTotal(await client.getLedger());
     expect(before).toBe(12);
 
     const first = await client.refresh(out.intentId);
@@ -43,7 +53,7 @@ describe('refreshIntent (in-memory client)', () => {
     expect(second.receipt?.status).toBe('succeeded');
     const snap = await client.getLedger();
     expect(snap.entries[0]?.receipt?.status).toBe('succeeded');
-    expect(snap.today.totals[DEMO_POLICY.agentId]).toBe(before);
+    expect(agentTotal(snap)).toBe(before);
   });
 
   it('outcome failed drops out of daily total', async () => {
@@ -54,11 +64,11 @@ describe('refreshIntent (in-memory client)', () => {
       pendingSettlement: { afterChecks: 1, outcome: 'failed' },
     });
     const out = await client.submitIntent(draft(DEMO_SCENARIOS[0]!.task), 'mock');
-    expect((await client.getLedger()).today.totals[DEMO_POLICY.agentId]).toBe(12);
+    expect(agentTotal(await client.getLedger())).toBe(12);
     const refreshed = await client.refresh(out.intentId);
     expect(refreshed.status).toBe('failed');
     expect(refreshed.changed).toBe(true);
-    expect((await client.getLedger()).today.totals[DEMO_POLICY.agentId]).toBeUndefined();
+    expect(agentTotal(await client.getLedger())).toBe(0);
   });
 
   it('pending receipt with adapter lacking status -> status_unsupported', async () => {
