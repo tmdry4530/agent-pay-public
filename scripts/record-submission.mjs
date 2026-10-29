@@ -20,6 +20,8 @@ const API_PORT = Number(process.env.DEMO_API_PORT) || 8787;
 const WEB_PORT = Number(process.env.DEMO_WEB_PORT) || 5173;
 const ROLES = ['intro', 'paid', 'rejected', 'approval', 'approved', 'ledger', 'resolve', 'cli'];
 const MAX_TOTAL_SECONDS = 175;
+/** S7 caption fire times (seconds from scene start). */
+const S7_CAPTION_OFFSETS = [0, 4.5, 9.0];
 const WEB_ZOOM = Number(process.env.WEB_ZOOM ?? '0.8');
 const SECRET_RE = /(secret|api[_-]?key|token\b|password|Bearer )/i;
 
@@ -38,6 +40,8 @@ const captionTimers = [];
 const captionOverlapChecks = [];
 /** @type {{ tag: string; expected: string; actual: string }[]} */
 const spentChecks = [];
+/** @type {{ sceneId: string; text: string; atSec: number }[]} */
+const captionLog = [];
 
 let t0 = 0;
 let signalExitCode = null;
@@ -942,11 +946,37 @@ async function setCaption(page, sceneLabel, text) {
 
 function scheduleSceneCaptions(page, scene) {
   const label = `${scene.id} · ${stripMarkdownBackticks(scene.title)}`;
-  for (const chunk of scene.captionChunks) {
-    const fireAt = t0 + (scene.start + chunk.startOffset) * 1000;
+  /** @type {number[]} */
+  let offsets;
+  if (scene.role === 'resolve') {
+    if (scene.captionChunks.length !== 3) {
+      throw new Error(
+        `S7 resolve scene must have exactly 3 caption chunks (got ${scene.captionChunks.length})`,
+      );
+    }
+    if (!scene.captionChunks[1].text.startsWith('The payment stays pending')) {
+      throw new Error(
+        `S7 caption chunk[1] must start with "The payment stays pending" (got ${JSON.stringify(scene.captionChunks[1].text.slice(0, 60))}…)`,
+      );
+    }
+    offsets = S7_CAPTION_OFFSETS;
+  } else {
+    offsets = scene.captionChunks.map((c) => c.startOffset);
+  }
+  for (let i = 0; i < scene.captionChunks.length; i++) {
+    const chunk = scene.captionChunks[i];
+    const startOffset = offsets[i];
+    const fireAt = t0 + (scene.start + startOffset) * 1000;
     const delay = Math.max(0, fireAt - Date.now());
     const timer = setTimeout(() => {
-      void setCaption(page, label, chunk.text);
+      void (async () => {
+        await setCaption(page, label, chunk.text);
+        captionLog.push({
+          sceneId: scene.id,
+          text: chunk.text,
+          atSec: (Date.now() - t0) / 1000,
+        });
+      })();
     }, delay);
     captionTimers.push(timer);
   }
@@ -1355,6 +1385,7 @@ if (process.env.PARSE_ONLY === '1') {
           duration: s.duration,
           narrationWordCount: wordCount(s.narration),
           captionChunks: s.captionChunks,
+          ...(s.role === 'resolve' ? { captionStartOffsets: S7_CAPTION_OFFSETS } : {}),
         })),
       },
       null,
@@ -1594,7 +1625,7 @@ try {
   });
 
   // Scene 7 — Intents & manual resolve
-  await runScene('resolve', async (_scene, scheduleCaptions) => {
+  await runScene('resolve', async (scene, scheduleCaptions) => {
     await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
@@ -1609,15 +1640,53 @@ try {
       const li = document.querySelector(sel);
       return li?.querySelector('.intent-flow__chip')?.innerText?.trim() ?? '';
     }, intentSel);
+    await pause(page, 900);
+
+    await scrollIntoViewAboveCaptionSel(page, '[data-testid="gauge"]', { gap: 16, minTop: 8 });
+    await highlight(page, 'gauge');
+    await assertNotUnderCaption(page, 'gauge', 's7-gauge-119', FULL);
     await assertSpent(page, 's7-start', '$119.00');
-    await pause(page, 2500);
+    resolveTimingFields.s7Gauge119ShownAtSec = (Date.now() - t0) / 1000;
+    await pause(page, 1100);
+    resolveTimingFields.s7Gauge119LeftAtSec = (Date.now() - t0) / 1000;
+
+    await scrollAboveCaptionSel(page, intentSel);
+    await highlightIntentPanelAndItem(page, intentSel);
+    await assertSelNotUnderCaption(page, intentSel, 's7-intent-needs-check-back', FULL);
+    await pause(page, 400);
 
     await page
       .getByRole('button', { name: 'Resolve Buy API credits (rail error)' })
       .click();
     await page.getByTestId('resolve-form').waitFor({ state: 'visible' });
+    resolveTimingFields.resolveClickAtSec = (Date.now() - t0) / 1000;
     await pause(page, 600);
     await waitScrollSettled(page);
+
+    const taskBannerText = (await page.getByTestId('task-banner').innerText()).trim();
+    resolveTimingFields.taskBannerAfterResolve = taskBannerText;
+    if (!taskBannerText.includes('Buy API credits (rail error)')) {
+      throw new Error(
+        `task-banner after Resolve must mention Buy API credits (rail error) (got "${taskBannerText}")`,
+      );
+    }
+    if (taskBannerText.includes('NEAR')) {
+      throw new Error(`task-banner after Resolve must not contain NEAR (got "${taskBannerText}")`);
+    }
+    const taskBannerCounts = await page.evaluate(() => ({
+      selectedScenarios: document.querySelectorAll('.scenario-card.is-selected').length,
+      errorSteps: document.querySelectorAll('.stepper__step.is-error').length,
+    }));
+    if (taskBannerCounts.selectedScenarios !== 0) {
+      throw new Error(
+        `expected 0 selected scenario cards after Resolve (got ${taskBannerCounts.selectedScenarios})`,
+      );
+    }
+    if (taskBannerCounts.errorSteps !== 0) {
+      throw new Error(
+        `expected 0 stepper error steps after Resolve (got ${taskBannerCounts.errorSteps})`,
+      );
+    }
 
     await scrollAboveCaption(page, 'decision');
     resolveTimingFields.outcomeBadgeBefore = (
@@ -1628,7 +1697,7 @@ try {
         `expected result-status needs check before resolve, got "${resolveTimingFields.outcomeBadgeBefore}"`,
       );
     }
-    await pause(page, 1500);
+    await pause(page, 1200);
 
     await scrollAboveCaption(page, 'resolve-form');
     await highlight(page, 'resolve-form');
@@ -1642,14 +1711,45 @@ try {
     await byEl.click();
     await byEl.fill('');
     await byEl.pressSequentially('ops-bob', { delay: 40 });
+    const opsBobValue = await byEl.inputValue();
+    if (opsBobValue !== 'ops-bob') {
+      throw new Error(`resolve-by must be "ops-bob" after typing (got "${opsBobValue}")`);
+    }
+    resolveTimingFields.opsBobVisibleAtSec = (Date.now() - t0) / 1000;
 
     await assertNotUnderCaption(page, 'resolve-form', 's7-resolve-form-filled', FULL);
     const submitText = (await page.getByTestId('btn-resolve-submit').innerText()).trim();
     if (submitText !== 'Record outcome') {
       throw new Error(`resolve submit button text must be "Record outcome" (got "${submitText}")`);
     }
-    await pause(page, 500);
+
+    const opsBobVisibleAtSec = resolveTimingFields.opsBobVisibleAtSec;
+    const recordEarliestSec = Math.max(
+      opsBobVisibleAtSec + 1.2,
+      scene.start + S7_CAPTION_OFFSETS[2] + 0.4,
+    );
+    await until(recordEarliestSec);
+    const thirdCaptionText = scene.captionChunks[2].text;
+    const captionPollDeadline = Date.now() + 2000;
+    while (
+      !captionLog.some((e) => e.sceneId === scene.id && e.text === thirdCaptionText) &&
+      Date.now() < captionPollDeadline
+    ) {
+      await pause(page, 50);
+    }
+    if (!captionLog.some((e) => e.sceneId === scene.id && e.text === thirdCaptionText)) {
+      throw new Error('S7 third caption not in captionLog within 2s before Record outcome click');
+    }
+
     await page.getByTestId('btn-resolve-submit').click();
+    resolveTimingFields.recordOutcomeClickAtSec = (Date.now() - t0) / 1000;
+    resolveTimingFields.opsBobVisibleDurationSec =
+      resolveTimingFields.recordOutcomeClickAtSec - opsBobVisibleAtSec;
+    if (resolveTimingFields.opsBobVisibleDurationSec < 1.0) {
+      throw new Error(
+        `ops-bob visible duration before Record outcome must be ≥1.0s (got ${resolveTimingFields.opsBobVisibleDurationSec.toFixed(2)}s)`,
+      );
+    }
 
     const resolveErr = page.getByTestId('resolve-error');
     if (await resolveErr.isVisible().catch(() => false)) {
@@ -1676,16 +1776,41 @@ try {
     if (!/^failed$/i.test(resolveTimingFields.resolveBadge)) {
       throw new Error(`expected result-status failed after resolve, got "${resolveTimingFields.resolveBadge}"`);
     }
+    resolveTimingFields.failedVisibleAtSec = (Date.now() - t0) / 1000;
+    const failedVisibleAtSec = resolveTimingFields.failedVisibleAtSec;
+    const recordOutcomeClickAtSec = resolveTimingFields.recordOutcomeClickAtSec;
+    const pendingCaptionEntry = captionLog.find(
+      (e) => e.sceneId === scene.id && e.text.startsWith('The payment stays pending'),
+    );
+    const thirdCaptionEntry = captionLog.find(
+      (e) => e.sceneId === scene.id && e.text === thirdCaptionText,
+    );
+    if (!pendingCaptionEntry) {
+      throw new Error('captionLog missing S7 "The payment stays pending" caption');
+    }
+    if (!thirdCaptionEntry) {
+      throw new Error('captionLog missing S7 third caption');
+    }
+    if (pendingCaptionEntry.atSec >= failedVisibleAtSec) {
+      throw new Error(
+        `S7 pending caption at ${pendingCaptionEntry.atSec.toFixed(2)}s must appear before FAILED at ${failedVisibleAtSec.toFixed(2)}s`,
+      );
+    }
+    if (thirdCaptionEntry.atSec > recordOutcomeClickAtSec) {
+      throw new Error(
+        `S7 third caption at ${thirdCaptionEntry.atSec.toFixed(2)}s must be on screen by Record outcome click at ${recordOutcomeClickAtSec.toFixed(2)}s`,
+      );
+    }
 
     await scrollAboveCaption(page, 'resolve-success');
     await assertNotUnderCaption(page, 'resolve-success', 's7-resolve-success', FULL);
     await highlight(page, 'resolve-success');
-    await pause(page, 1500);
+    await pause(page, 1200);
 
     await scrollAboveCaption(page, 'payment-outcome');
     await highlight(page, 'payment-outcome');
     await assertNotUnderCaption(page, 'payment-outcome', 's7-payment-outcome', FULL);
-    await pause(page, 1500);
+    await pause(page, 1200);
 
     await markIntentFlow(page, 'Buy API credits (rail error)', 'needs-check');
     const resolutionText = await page.evaluate((sel) => {
@@ -1706,7 +1831,7 @@ try {
     await assertNotUnderCaption(page, 'gauge', 's7-gauge-107', FULL);
     resolveTimingFields.s7GaugeVisibleAtSec = (Date.now() - t0) / 1000;
     await assertSpent(page, 's7-end', '$107.00');
-    await pause(page, 1500);
+    await pause(page, 1000);
   });
 
   // Scene 8 — CLI
@@ -1790,6 +1915,7 @@ try {
     ledgerPath,
     seedStdout,
     spentChecks,
+    captionLog,
     ...resolveTimingFields,
     t0,
     scenes: timingLog,
@@ -1812,6 +1938,19 @@ try {
     );
   }
   console.log(`timing log: ${timingPath}`);
+
+  const s7Scene = scenes.find((s) => s.role === 'resolve');
+  const s7Start = s7Scene?.start ?? 0;
+  const fmt = (sec) => (Number(sec) - s7Start).toFixed(2);
+  const caption2Entry = captionLog.find(
+    (e) => e.sceneId === 'S7' && e.text.startsWith('The payment stays pending'),
+  );
+  const caption3Entry = captionLog.find(
+    (e) => e.sceneId === 'S7' && e.text === s7Scene?.captionChunks[2]?.text,
+  );
+  console.log(
+    `S7 sub-timings: gauge119 ${fmt(resolveTimingFields.s7Gauge119ShownAtSec)}-${fmt(resolveTimingFields.s7Gauge119LeftAtSec)}s, caption2 ${caption2Entry ? fmt(caption2Entry.atSec) : '—'}s, caption3 ${caption3Entry ? fmt(caption3Entry.atSec) : '—'}s, ops-bob visible ${Number(resolveTimingFields.opsBobVisibleDurationSec ?? 0).toFixed(2)}s, record click ${fmt(resolveTimingFields.recordOutcomeClickAtSec)}s, FAILED ${fmt(resolveTimingFields.failedVisibleAtSec)}s, gauge107 ${fmt(resolveTimingFields.s7GaugeVisibleAtSec)}s`,
+  );
 
   const bytes = fs.statSync(OUT).size;
   console.log(`video: ${OUT} (${bytes} bytes)`);
