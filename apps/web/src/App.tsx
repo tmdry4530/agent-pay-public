@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { apiErrorCode } from './data/apiError';
+import { dailyTotalForAgent } from './data/compat';
 import type { IntentDraft } from './data/agentPayClient';
 import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
@@ -148,7 +149,11 @@ export default function App() {
 
   const currency = policy?.currency ?? 'USD';
   const agentId = policy?.agentId ?? 'demo-agent';
-  const spentToday = ledgerSnap?.today.totals[agentId] ?? 0;
+  const spentToday = dailyTotalForAgent(ledgerSnap?.today, {
+    agentId,
+    fallbackCurrency: currency,
+    currency,
+  });
   const dailyMax = policy?.dailyMax ?? 0;
   const perTxMax = policy?.perTxMax ?? 0;
   const requireApprovalAbove = policy?.requireApprovalAbove ?? 0;

@@ -8,6 +8,16 @@ import type {
 } from '@agent-pay/core';
 import type { LedgerEntry, PaymentStatus, ReceiptResolution } from '@agent-pay/core';
 
+/** Local payment status including in-flight 'submitting' (future core); cast at core Ledger boundary. */
+export type WebPaymentStatus = PaymentStatus | 'submitting';
+
+type MutableLedgerEntry = Omit<LedgerEntry, 'paymentStatus'> & { paymentStatus?: WebPaymentStatus };
+
+/** Read paymentStatus including the web-only 'submitting' marker. */
+export function webPaymentStatus(entry: LedgerEntry): WebPaymentStatus | undefined {
+  return (entry as MutableLedgerEntry).paymentStatus;
+}
+
 /** UTC calendar day "YYYY-MM-DD" of a Date or ISO string. */
 export function utcDay(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
@@ -22,7 +32,8 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
  */
 export function countsTowardDailyTotal(entry: LedgerEntry): boolean {
   if (entry.decision?.status !== 'approved') return false;
-  if (entry.paymentStatus === 'failed') return false;
+  const ps = entry.paymentStatus as WebPaymentStatus | undefined;
+  if (ps === 'failed') return false;
   if (entry.receipt?.status === 'failed') return false;
   return true;
 }
@@ -97,6 +108,24 @@ export class MemoryLedger {
     });
   }
 
+  markSubmitting(intentId: string): Promise<LedgerEntry> {
+    return this.#mutate((entries) => {
+      const entry = find(entries, intentId);
+      if (entry.decision?.status !== 'approved') {
+        throw new MemoryLedgerError(
+          `intent ${intentId} cannot submit payment: decision is ${entry.decision?.status ?? 'missing'}`,
+        );
+      }
+      const ps = webPaymentStatus(entry);
+      if (ps !== undefined && ps !== 'submitting') {
+        throw new MemoryLedgerError(`intent ${intentId} already has payment status ${ps}`);
+      }
+      (entry as MutableLedgerEntry).paymentStatus = 'submitting';
+      entry.updatedAt = this.#now().toISOString();
+      return entry;
+    });
+  }
+
   recordPayment(intentId: string, status: PaymentStatus): Promise<LedgerEntry> {
     return this.#mutate((entries) => {
       const entry = find(entries, intentId);
@@ -105,8 +134,9 @@ export class MemoryLedger {
           `intent ${intentId} cannot be paid: decision is ${entry.decision?.status ?? 'missing'}`,
         );
       }
-      if (entry.paymentStatus !== undefined) {
-        throw new MemoryLedgerError(`intent ${intentId} already has payment status ${entry.paymentStatus}`);
+      const ps = webPaymentStatus(entry);
+      if (ps !== undefined && ps !== 'submitting') {
+        throw new MemoryLedgerError(`intent ${intentId} already has payment status ${ps}`);
       }
       entry.paymentStatus = status;
       entry.updatedAt = this.#now().toISOString();
