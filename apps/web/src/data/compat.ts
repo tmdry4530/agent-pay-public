@@ -201,6 +201,20 @@ export function validateResolveRequest(input: {
   };
 }
 
+const CONFLICT_409_FALLBACK =
+  'The server reported a conflict with the current state. Showing the latest ledger.';
+
+/** Human message from a 409 ApiError (detail, legacy after `:`, or fallback). */
+export function conflict409ServerMessage(err: ApiError): string {
+  const fromDetail =
+    err.detail ??
+    (err.message.includes(':') ? err.message.slice(err.message.indexOf(':') + 1).trim() : err.message);
+  const trimmed = fromDetail.trim();
+  // A bare code (e.g. body `{error: "duplicate_intent"}` with no message) is not a human message.
+  if (trimmed.length === 0 || trimmed === apiErrorCode(err)) return CONFLICT_409_FALLBACK;
+  return trimmed;
+}
+
 export function describeResolveError(err: unknown): { title: string; message: string } {
   if (err instanceof PaymentError) {
     switch (err.code) {
@@ -247,6 +261,12 @@ export function describeResolveError(err: unknown): { title: string; message: st
     }
     if (code === 'invalid_body') {
       return { title: 'Invalid resolve request', message: detail || err.message };
+    }
+    if (err.status === 409) {
+      const resolvedCode = code ?? 'conflict';
+      if (!RACE_409_SET.has(resolvedCode)) {
+        return { title: 'Conflict', message: conflict409ServerMessage(err) };
+      }
     }
   }
 
@@ -396,8 +416,7 @@ export function isAlreadyProcessed(err: unknown, options: AlreadyProcessedOption
   const code = apiErrorCode(err);
   if (code && RACE_CODES.has(code)) return true;
   if (options.action === 'approve' || options.action === 'reject') {
-    if (code === 'intent_conflict') return false;
-    return true;
+    if (!code || code.length === 0) return true;
   }
   return false;
 }

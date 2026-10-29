@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import { PaymentError } from '@agent-pay/core/orchestrator.ts';
-import { apiErrorCode } from './data/apiError';
+import { ApiError, apiErrorCode } from './data/apiError';
 import {
   dailyTotalForAgent,
   displayRunStatus,
@@ -21,7 +21,7 @@ import {
 import type { IntentDraft } from './data/agentPayClient';
 import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
-import { describeError, type DescribedError } from './data/describeError';
+import { describeError, type DescribedError, type DescribeErrorContext } from './data/describeError';
 import { derivePipelineSteps } from './data/intentFlow';
 import { serverNow } from './data/serverClock';
 import { paymentResultFromLedgerEntry } from './data/ledgerResult';
@@ -314,6 +314,22 @@ export default function App({ clock = systemClock }: AppProps) {
     [client],
   );
 
+  const applyActionError = useCallback(
+    async (e: unknown, context: DescribeErrorContext = {}, syncIntentId?: string) => {
+      const described = describeError(e, context);
+      setActionError(described);
+      if (described.kind === 'conflict') {
+        await refreshLedger();
+        if (syncIntentId) {
+          await syncIntentFromLedger(syncIntentId);
+        }
+      } else if (isAlreadyProcessed(e, context) && syncIntentId) {
+        await syncIntentFromLedger(syncIntentId);
+      }
+    },
+    [refreshLedger, syncIntentFromLedger],
+  );
+
   const clearRun = useCallback(() => {
     setDraft(null);
     setIntent(null);
@@ -369,7 +385,7 @@ export default function App({ clock = systemClock }: AppProps) {
       }
       await refreshLedger();
     } catch (e) {
-      setActionError(describeError(e));
+      await applyActionError(e);
     } finally {
       setPayInFlight(false);
       setBusy(false);
@@ -390,12 +406,7 @@ export default function App({ clock = systemClock }: AppProps) {
       setStep(out.receipt ? 'receipt' : 'decision');
       await refreshLedger();
     } catch (e) {
-      if (isAlreadyProcessed(e, { action: 'approve' })) {
-        setActionError(describeError(e, { action: 'approve' }));
-        await syncIntentFromLedger(intent.id);
-      } else {
-        setActionError(describeError(e));
-      }
+      await applyActionError(e, { action: 'approve' }, intent.id);
     } finally {
       setPayInFlight(false);
       setBusy(false);
@@ -412,12 +423,7 @@ export default function App({ clock = systemClock }: AppProps) {
       setStep('decision');
       await refreshLedger();
     } catch (e) {
-      if (isAlreadyProcessed(e, { action: 'reject' })) {
-        setActionError(describeError(e, { action: 'reject' }));
-        await syncIntentFromLedger(intent.id);
-      } else {
-        setActionError(describeError(e));
-      }
+      await applyActionError(e, { action: 'reject' }, intent.id);
     } finally {
       setBusy(false);
     }
@@ -461,7 +467,7 @@ export default function App({ clock = systemClock }: AppProps) {
         setRefreshHidden(true);
         setRefreshNote(null);
       } else {
-        setActionError(describeError(e));
+        await applyActionError(e);
       }
     } finally {
       setBusy(false);
@@ -506,10 +512,11 @@ export default function App({ clock = systemClock }: AppProps) {
         setResolveTargetId(null);
         setResolveSuccess(`Resolved as ${req.status} by ${req.resolvedBy}.`);
       } catch (e) {
+        // Any 409 (race, receipt_not_pending, or an unknown conflict) means our view is stale: reload the ledger.
         const code = paymentErrorCode(e);
-        if (code === 'receipt_not_pending') {
+        if (code === 'receipt_not_pending' || (e instanceof ApiError && e.status === 409)) {
           await refreshLedger();
-          if (targetId === activeIntentId) {
+          if (code === 'receipt_not_pending' && targetId === activeIntentId) {
             await syncIntentFromLedger(targetId);
           }
         }
