@@ -42,6 +42,18 @@ becomes 0.1 NEAR). A React web demo walks the same pipeline; its Mock/PayPal/NEA
 - The ledger enforces intent, decision, payment, receipt order and one payment per intent, and writes atomically.
 - A `pending` receipt is not final: `POST /intents/:id/refresh` asks the rail for its status, and a payment that
   turns out `failed` stops counting toward the daily total.
+- The daily limit holds under concurrent requests: the limit check and the write that records the decision are one
+  serialized step, and every ledger write takes an exclusive lock file, so API processes sharing one ledger file
+  cannot both spend the same remaining budget. (Taking over a lock left by a crashed process is best-effort.)
+- The accounting day is the UTC day on the server clock when the amount was approved, not a time the agent sends.
+- Retries are idempotent: the intent id (in the body or an `Idempotency-Key` header) is the key, the CLI reuses its
+  intent id on every retry, and a replay is compared after normalizing timestamp format and currency case.
+- If the rail call throws, times out or returns a receipt that does not match the intent, the outcome is unknown:
+  its receipt stays `pending`, the amount keeps holding the daily limit, and the payment is never re-sent automatically.
+- An operator settles it with `POST /intents/:id/resolve` (succeeded or failed), which records a required note and
+  `resolvedBy` in the ledger; a failed outcome releases the hold. The web demo has a Resolve form for this.
+- The ledger is still a local JSON file: a ledger file that disappears is detected only by a process that has
+  already used it.
 - The API binds to `127.0.0.1` by default. PayPal and NEAR credentials are read only from the environment; a missing
   one stops startup with its name, never its value.
 
@@ -56,4 +68,4 @@ yet. A PayPal Orders v2 module (`paypal-orders`) stays adapter-side only.
 ### Next steps
 
 - Add an LLM planner behind the existing `Planner` interface; the policy engine still has the final say.
-- Persist policies, support several agents, and replace the single-writer JSON ledger with a database.
+- Persist policies, support several agents, and replace the file-locked JSON ledger with a database.
