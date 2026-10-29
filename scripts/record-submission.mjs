@@ -579,11 +579,23 @@ async function scrollAboveCaptionSel(page, selector) {
     if (rect.bottom > targetBottom) {
       const scrollDown = rect.bottom - targetBottom;
       const topAfter = rect.top - scrollDown;
-      if (topAfter < minTop) {
-        window.scrollBy({ top: rect.top - minTop, behavior: 'instant' });
-      } else {
-        window.scrollBy({ top: scrollDown, behavior: 'instant' });
+      const want = topAfter < minTop ? rect.top - minTop : scrollDown;
+      // Near the end of the page there may not be enough document left to scroll the element
+      // above the caption; grow a recorder-owned spacer so the scroll can happen.
+      const root = document.scrollingElement || document.documentElement;
+      const maxScroll = root.scrollHeight - window.innerHeight - window.scrollY;
+      if (want > maxScroll) {
+        let spacer = document.getElementById('record-scroll-spacer');
+        if (!spacer) {
+          spacer = document.createElement('div');
+          spacer.id = 'record-scroll-spacer';
+          spacer.setAttribute('aria-hidden', 'true');
+          document.body.appendChild(spacer);
+        }
+        const cur = spacer.getBoundingClientRect().height;
+        spacer.style.height = `${Math.ceil(cur + (want - maxScroll) / 0.5 + 40)}px`;
       }
+      window.scrollBy({ top: want, behavior: 'instant' });
     }
   }, selector);
   await pause(page, 400);
