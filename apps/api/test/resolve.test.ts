@@ -87,7 +87,7 @@ type LedgerBody = {
     receipt?: Receipt & { meta?: Record<string, string> };
     resolution?: { note: string; resolvedBy: string; previousExternalId: string };
   }[];
-  today: { totals: Record<string, number> };
+  today: { totals: Record<string, Record<string, number>> };
 };
 
 test('resolve happy paths and adapter isolation', async (t) => {
@@ -104,7 +104,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   assert.equal(counts.statusCalls, 0);
 
   const ledgerBeforeFail = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;
-  assert.equal(ledgerBeforeFail.today.totals['demo-agent'], 10);
+  assert.deepEqual(ledgerBeforeFail.today.totals['demo-agent'], { USD: 10 });
 
   const failRes = await fetch(`${base}/intents/pi_fail_resolve/resolve`, {
     method: 'POST',
@@ -126,7 +126,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   assert.equal(counts.statusCalls, 0);
 
   const ledgerAfterFail = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;
-  assert.equal(ledgerAfterFail.today.totals['demo-agent'], undefined);
+  assert.deepEqual(ledgerAfterFail.today.totals['demo-agent'], {});
   const failEntry = ledgerAfterFail.entries.find((e) => e.intent.id === 'pi_fail_resolve');
   assert.ok(failEntry?.resolution);
   assert.equal(failEntry?.receipt?.meta?.needsManualResolve, 'true');
@@ -140,7 +140,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   assert.equal(counts.payCalls, baselinePay + 1);
 
   const ledgerBeforeOk = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;
-  assert.equal(ledgerBeforeOk.today.totals['demo-agent'], 10);
+  assert.deepEqual(ledgerBeforeOk.today.totals['demo-agent'], { USD: 10 });
 
   const okRes = await fetch(`${base}/intents/pi_ok_resolve/resolve`, {
     method: 'POST',
@@ -167,7 +167,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   assert.equal(counts.statusCalls, 0);
 
   const ledgerAfterOk = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;
-  assert.equal(ledgerAfterOk.today.totals['demo-agent'], 10);
+  assert.deepEqual(ledgerAfterOk.today.totals['demo-agent'], { USD: 10 });
 
   const create3 = await fetch(`${base}/intents`, {
     method: 'POST',
@@ -176,7 +176,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   });
   assert.equal(create3.status, 201);
   const ledgerBeforeRefund = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;
-  assert.equal(ledgerBeforeRefund.today.totals['demo-agent'], 20);
+  assert.deepEqual(ledgerBeforeRefund.today.totals['demo-agent'], { USD: 20 });
 
   const refundRes = await fetch(`${base}/intents/pi_refund_resolve/resolve`, {
     method: 'POST',
@@ -188,7 +188,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
   assert.equal(counts.statusCalls, 0);
 
   const ledgerAfterRefund = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;
-  assert.equal(ledgerAfterRefund.today.totals['demo-agent'], 20);
+  assert.deepEqual(ledgerAfterRefund.today.totals['demo-agent'], { USD: 20 });
 
   const again = await fetch(`${base}/intents/pi_ok_resolve/resolve`, {
     method: 'POST',

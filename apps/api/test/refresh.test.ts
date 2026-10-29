@@ -119,8 +119,10 @@ test('refresh pending -> failed drops today totals', async (t) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(baseIntent({ id: 'pi_fail', amount: 10 })),
   });
-  const ledgerBefore = (await (await fetch(`${base}/ledger`)).json()) as { today: { totals: Record<string, number> } };
-  assert.equal(ledgerBefore.today.totals['demo-agent'], 10);
+  const ledgerBefore = (await (await fetch(`${base}/ledger`)).json()) as {
+    today: { totals: Record<string, Record<string, number>> };
+  };
+  assert.deepEqual(ledgerBefore.today.totals['demo-agent'], { USD: 10 });
 
   const res = await fetch(`${base}/intents/pi_fail/refresh`, { method: 'POST' });
   assert.equal(res.status, 200);
@@ -128,8 +130,10 @@ test('refresh pending -> failed drops today totals', async (t) => {
   assert.equal(body.status, 'failed');
   assert.match(body.error ?? '', /^payment_declined:/);
 
-  const ledgerAfter = (await (await fetch(`${base}/ledger`)).json()) as { today: { totals: Record<string, number> } };
-  assert.equal(ledgerAfter.today.totals['demo-agent'], undefined);
+  const ledgerAfter = (await (await fetch(`${base}/ledger`)).json()) as {
+    today: { totals: Record<string, Record<string, number>> };
+  };
+  assert.deepEqual(ledgerAfter.today.totals['demo-agent'], {});
 });
 
 test('refresh errors: 404, 409 no_receipt, 409 settled, 409 unsupported, 502', async (t) => {

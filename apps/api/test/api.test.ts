@@ -285,11 +285,12 @@ test('GET /ledger entries and today totals', async (t) => {
   assert.equal(res.status, 200);
   const ledger = (await res.json()) as {
     entries: unknown[];
-    today: { day: string; totals: Record<string, number> };
+    today: { day: string; totals: Record<string, Record<string, number>> };
   };
   assert.ok(Array.isArray(ledger.entries));
   assert.equal(ledger.entries.length, 5);
-  assert.deepEqual(ledger.today, { day: '2026-10-28', totals: { 'demo-agent': 15 } });
+  // Today totals use accountingDay (paid/approved day), so pi_yesterday counts today: 10 + 25 + 5.
+  assert.deepEqual(ledger.today, { day: '2026-10-28', totals: { 'demo-agent': { USD: 40 } } });
 });
 
 test('GET /ledger includes each entry\'s decision history', async (t) => {
