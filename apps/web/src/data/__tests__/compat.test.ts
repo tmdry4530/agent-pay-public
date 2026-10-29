@@ -3,13 +3,19 @@ import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../apiError';
 import {
+  describeResolveError,
   failureInfo,
   isAlreadyProcessed,
+  isStuckSubmitting,
   isSubmitting,
   isSubmittingResult,
   needsManualResolve,
+  needsResolve,
   normalizeTotals,
+  parseRace409,
   reasonInfo,
+  STUCK_SUBMITTING_MS,
+  validateResolveRequest,
 } from '../compat';
 
 describe('compat', () => {
@@ -148,6 +154,77 @@ describe('compat', () => {
     it('ignores garbage and non-finite numbers', () => {
       expect(normalizeTotals(null, opts)).toEqual({});
       expect(normalizeTotals({ totals: { 'agent-a': { USD: NaN, EUR: 2 } } }, opts)).toEqual({ EUR: 2 });
+    });
+  });
+
+  describe('parseRace409', () => {
+    it('reads ApiError legacy and new shapes', () => {
+      expect(parseRace409(new ApiError(409, 'already_paid: x'))).toBe('already_paid');
+      expect(
+        parseRace409(new ApiError(409, 'in_progress: x', { code: 'in_progress', detail: 'x' })),
+      ).toBe('in_progress');
+      expect(parseRace409(new ApiError(409, 'receipt_not_pending: x'))).toBeNull();
+    });
+  });
+
+  describe('stuck submitting', () => {
+    const anchor = '2026-01-01T12:00:00.000Z';
+    const entry = {
+      paymentStatus: 'submitting' as const,
+      submission: { rail: 'mock' as const, at: anchor },
+      updatedAt: anchor,
+    };
+
+    it('isStuckSubmitting after threshold', () => {
+      const now = new Date(Date.parse(anchor) + STUCK_SUBMITTING_MS + 1);
+      expect(isStuckSubmitting(entry as never, now)).toBe(true);
+      expect(needsResolve({ ...entry, needsManualResolve: true } as never, now)).toBe(true);
+    });
+
+    it('not stuck before threshold', () => {
+      const now = new Date(Date.parse(anchor) + STUCK_SUBMITTING_MS - 1);
+      expect(isStuckSubmitting(entry as never, now)).toBe(false);
+    });
+  });
+
+  describe('validateResolveRequest', () => {
+    it('trims and validates required fields', () => {
+      const ok = validateResolveRequest({
+        status: ' succeeded ',
+        note: '  note  ',
+        resolvedBy: ' ops ',
+        externalId: '  ',
+      });
+      expect(ok).toEqual({
+        ok: true,
+        value: { status: 'succeeded', note: 'note', resolvedBy: 'ops' },
+      });
+    });
+
+    it('reports max length and invalid status', () => {
+      const bad = validateResolveRequest({
+        status: 'refunded',
+        note: '',
+        resolvedBy: 'x'.repeat(129),
+        externalId: 'y'.repeat(257),
+      });
+      expect(bad.ok).toBe(false);
+      if (!bad.ok) {
+        expect(bad.errors.status).toBeDefined();
+        expect(bad.errors.note).toBeDefined();
+        expect(bad.errors.resolvedBy).toBeDefined();
+        expect(bad.errors.externalId).toBeDefined();
+      }
+    });
+  });
+
+  describe('describeResolveError', () => {
+    it('maps known resolve errors', () => {
+      expect(describeResolveError(new PaymentError('no_receipt', 'x')).title).toBe('Nothing to resolve');
+      expect(describeResolveError(new ApiError(409, 'receipt_not_pending: gone')).title).toBe('Already resolved');
+      expect(describeResolveError(new ApiError(404, 'intent_not_found: x')).title).toBe('Intent not found');
+      expect(describeResolveError(new ApiError(400, 'invalid_body: bad note')).message).toContain('bad note');
+      expect(describeResolveError(new ApiError(0, 'network_error: down')).title).toMatch(/unreachable/i);
     });
   });
 });

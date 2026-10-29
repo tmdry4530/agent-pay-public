@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, apiErrorCode } from '../apiError';
-import { describeError } from '../describeError';
+import { RACE_409_CODES } from '../compat';
 import { createHttpClient } from '../httpClient';
 
 describe('createHttpClient', () => {
@@ -127,40 +127,194 @@ describe('createHttpClient', () => {
     await expect(client.getPolicy()).rejects.toEqual(new ApiError(400, 'invalid_body: bad field'));
   });
 
-  it('joins {error, message} so describeError still splits code and detail', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 409,
-      statusText: 'Conflict',
-      json: async () => ({ error: 'status_unsupported', message: 'use POST /intents/:id/resolve' }),
+  describe('server clock offset from Date header', () => {
+    const base = 'http://127.0.0.1:8787';
+
+    function jsonResponse(
+      body: unknown,
+      init: { ok?: boolean; status?: number; date?: string | null } = {},
+    ): Response {
+      const ok = init.ok ?? true;
+      const status = init.status ?? (ok ? 200 : 409);
+      const headers = new Headers();
+      if (init.date !== null && init.date !== undefined) {
+        headers.set('Date', init.date);
+      }
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { ...Object.fromEntries(headers), 'Content-Type': 'application/json' },
+      });
+    }
+
+    it('starts at offset 0', () => {
+      const client = createHttpClient({ baseUrl: base, fetch: vi.fn() });
+      expect(client.serverClockOffsetMs?.()).toBe(0);
     });
-    const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
-    const caught = await client.refresh('pi_x').then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(caught).toEqual(new ApiError(409, 'status_unsupported: use POST /intents/:id/resolve'));
-    expect(apiErrorCode(caught)).toBe('status_unsupported');
-    const described = describeError(caught);
-    expect(described.code).toBe('status_unsupported');
-    expect(described.message).toBe('use POST /intents/:id/resolve');
+
+    it('updates offset from valid Date on success', async () => {
+      const localMs = 1_700_000_000_000;
+      const serverMs = localMs + 12_000;
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          { agentId: 'a', perTxMax: 1, dailyMax: 2, allowedPayees: [], requireApprovalAbove: 0 },
+          { date: new Date(serverMs).toUTCString() },
+        ),
+      );
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock, now: () => localMs });
+      await client.getPolicy();
+      expect(client.serverClockOffsetMs?.()).toBe(12_000);
+    });
+
+    it('keeps previous offset when Date is missing or invalid', async () => {
+      const localMs = 1_700_000_000_000;
+      const serverMs = localMs + 5_000;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(
+            { agentId: 'a', perTxMax: 1, dailyMax: 2, allowedPayees: [], requireApprovalAbove: 0 },
+            { date: new Date(serverMs).toUTCString() },
+          ),
+        )
+        .mockResolvedValueOnce(jsonResponse({ entries: [], today: { day: '2026-01-01', totals: {} } }, { date: null }))
+        .mockResolvedValueOnce(
+          jsonResponse({ entries: [], today: { day: '2026-01-01', totals: {} } }, { date: 'garbage' }),
+        );
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock, now: () => localMs });
+      await client.getPolicy();
+      expect(client.serverClockOffsetMs?.()).toBe(5_000);
+      await client.getLedger();
+      expect(client.serverClockOffsetMs?.()).toBe(5_000);
+      await client.getLedger();
+      expect(client.serverClockOffsetMs?.()).toBe(5_000);
+    });
+
+    it('captures offset from error responses', async () => {
+      const localMs = 1_700_000_000_000;
+      const serverMs = localMs - 30_000;
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          { error: 'not_pending: already done' },
+          { ok: false, status: 409, date: new Date(serverMs).toUTCString() },
+        ),
+      );
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock, now: () => localMs });
+      await expect(client.getPolicy()).rejects.toBeInstanceOf(ApiError);
+      expect(client.serverClockOffsetMs?.()).toBe(-30_000);
+    });
   });
 
-  it('keeps an old single-field error body so describeError still parses the code', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 409,
-      statusText: 'Conflict',
-      json: async () => ({ error: 'status_unsupported: use POST /intents/:id/resolve' }),
+  describe('409 race error shapes', () => {
+    const base = 'http://127.0.0.1:8787';
+
+    it.each(RACE_409_CODES)('legacy combined error for %s', async (code) => {
+      const legacy = `${code}: detail from server`;
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        json: async () => ({ error: legacy }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      let caught: unknown;
+      try {
+        await client.getPolicy();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toEqual(new ApiError(409, legacy));
+      expect(apiErrorCode(caught)).toBe(code);
     });
-    const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
-    const caught = await client.getPolicy().then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(caught).toEqual(new ApiError(409, 'status_unsupported: use POST /intents/:id/resolve'));
-    expect(apiErrorCode(caught)).toBe('status_unsupported');
-    expect(describeError(caught).code).toBe('status_unsupported');
+
+    it.each(RACE_409_CODES)('new { error, message } shape for %s', async (code) => {
+      const detail = `human detail for ${code}`;
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        json: async () => ({ error: code, message: detail }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      let caught: unknown;
+      try {
+        await client.getPolicy();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toEqual(new ApiError(409, `${code}: ${detail}`, { code, detail }));
+      expect(apiErrorCode(caught)).toBe(code);
+    });
+  });
+
+  describe('POST /intents/:id/resolve', () => {
+    const base = 'http://127.0.0.1:8787';
+    const intentId = 'pi/resolve';
+
+    it('sends exact body fields', async () => {
+      const body = {
+        intentId,
+        status: 'paid',
+        changed: true,
+        decision: { status: 'approved', reason: 'within_policy: ok' },
+        receipt: {
+          intentId,
+          rail: 'mock',
+          externalId: 'x',
+          status: 'succeeded',
+          at: '2026-01-01T00:00:00.000Z',
+        },
+        resolution: {
+          status: 'succeeded',
+          resolvedBy: 'ops',
+          note: 'ok',
+          at: '2026-01-01T00:00:01.000Z',
+          previousExternalId: '',
+        },
+      };
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      await client.resolve(intentId, { status: 'succeeded', note: 'ok', resolvedBy: 'ops' });
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${base}/intents/pi%2Fresolve/resolve`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ status: 'succeeded', note: 'ok', resolvedBy: 'ops' }),
+        }),
+      );
+    });
+
+    it('includes externalId when provided', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          intentId: 'a',
+          status: 'paid',
+          changed: true,
+          decision: { status: 'approved', reason: 'x: y' },
+          receipt: { intentId: 'a', rail: 'mock', externalId: 'e', status: 'succeeded', at: '2026-01-01T00:00:00.000Z' },
+          resolution: {
+            status: 'succeeded',
+            resolvedBy: 'ops',
+            note: 'n',
+            at: '2026-01-01T00:00:01.000Z',
+            previousExternalId: '',
+          },
+        }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      await client.resolve('a', {
+        status: 'failed',
+        note: 'n',
+        resolvedBy: 'ops',
+        externalId: 'ext-1',
+      });
+      expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
+        status: 'failed',
+        note: 'n',
+        resolvedBy: 'ops',
+        externalId: 'ext-1',
+      });
+    });
   });
 
   describe('POST /intents/:id/refresh', () => {

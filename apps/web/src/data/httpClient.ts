@@ -1,27 +1,40 @@
-import type { PaymentIntent, PaymentResult, Policy, Rail } from '@agent-pay/core';
+import type { PaymentIntent, PaymentResult, Policy, Rail, ReceiptResolution } from '@agent-pay/core';
 import { ApiError } from './apiError';
 import type { AgentPayClient, IntentDraft, LedgerSnapshot } from './agentPayClient';
+import type { ResolveRequest } from './compat';
+import { computeClockOffsetMs } from './serverClock';
 
 export type HttpClientOptions = {
   baseUrl: string;
   fetch?: typeof fetch;
+  /** Local epoch ms when a response is received (default `Date.now`). */
+  now?: () => number;
 };
 
 function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ message: string; code?: string; detail?: string }> {
   try {
-    const body = (await res.json()) as { error?: unknown; message?: unknown };
+    const body = (await res.json()) as { error?: string; message?: string };
     if (typeof body.error === 'string' && body.error.length > 0) {
-      if (typeof body.message === 'string' && body.message.length > 0) return `${body.error}: ${body.message}`;
-      return body.error;
+      if (
+        typeof body.message === 'string' &&
+        body.message.length > 0 &&
+        !body.error.includes(':')
+      ) {
+        const code = body.error;
+        const detail = body.message;
+        return { message: `${code}: ${detail}`, code, detail };
+      }
+      return { message: body.error };
     }
   } catch {
     /* ignore */
   }
-  return res.statusText || `HTTP ${res.status}`;
+  const fallback = res.statusText || `HTTP ${res.status}`;
+  return { message: fallback };
 }
 
 /**
@@ -31,6 +44,17 @@ async function readError(res: Response): Promise<string> {
 export function createHttpClient(options: HttpClientOptions): AgentPayClient {
   const base = trimBase(options.baseUrl);
   const fetchFn = options.fetch ?? fetch;
+  const nowFn = options.now ?? Date.now;
+  let clockOffsetMs = 0;
+
+  function captureClockOffset(res: Response): void {
+    // Tolerate minimal fetch stubs without headers (treated as a missing header).
+    const header = typeof res.headers?.get === 'function' ? res.headers.get('Date') : null;
+    const offset = computeClockOffsetMs(header, nowFn());
+    if (offset !== undefined) {
+      clockOffsetMs = offset;
+    }
+  }
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let res: Response;
@@ -52,8 +76,14 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
       }
       throw e;
     }
+    captureClockOffset(res);
     if (!res.ok) {
-      throw new ApiError(res.status, await readError(res));
+      const errBody = await readError(res);
+      throw new ApiError(
+        res.status,
+        errBody.message,
+        errBody.code !== undefined ? { code: errBody.code, detail: errBody.detail } : undefined,
+      );
     }
     return (await res.json()) as T;
   }
@@ -107,12 +137,32 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
       );
     },
 
+    resolve(
+      intentId: string,
+      req: ResolveRequest,
+    ): Promise<PaymentResult & { changed: true; resolution: ReceiptResolution }> {
+      const body: Record<string, string> = {
+        status: req.status,
+        note: req.note,
+        resolvedBy: req.resolvedBy,
+      };
+      if (req.externalId !== undefined) body.externalId = req.externalId;
+      return request<PaymentResult & { changed: true; resolution: ReceiptResolution }>(
+        `/intents/${encodeURIComponent(intentId)}/resolve`,
+        { method: 'POST', body: JSON.stringify(body) },
+      );
+    },
+
     getLedger(): Promise<LedgerSnapshot> {
       return request<LedgerSnapshot>('/ledger');
     },
 
     getHealth(): Promise<{ ok: boolean; rail: string }> {
       return request<{ ok: boolean; rail: string }>('/health');
+    },
+
+    serverClockOffsetMs(): number {
+      return clockOffsetMs;
     },
   };
 }

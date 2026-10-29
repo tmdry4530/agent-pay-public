@@ -36,6 +36,7 @@ describe('App states', () => {
       approve: (...args) => inner.approve(...args),
       reject: (...args) => inner.reject(...args),
       refresh: (...args) => inner.refresh(...args),
+      resolve: (...args) => inner.resolve(...args),
     };
 
     renderWith(client);
@@ -103,6 +104,7 @@ describe('App states', () => {
       approve: (...a) => inner.approve(...a),
       reject: (...a) => inner.reject(...a),
       refresh: (...a) => inner.refresh(...a),
+      resolve: (...a) => inner.resolve(...a),
     };
 
     const prev = window.location.href;
@@ -127,6 +129,7 @@ describe('App states', () => {
       approve: (...a) => inner.approve(...a),
       reject: (...a) => inner.reject(...a),
       refresh: (...a) => inner.refresh(...a),
+      resolve: (...a) => inner.resolve(...a),
     };
     const prev = window.location.href;
     window.history.replaceState({}, '', '/');

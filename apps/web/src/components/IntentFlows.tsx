@@ -1,6 +1,12 @@
 import type { DecisionRecord, LedgerEntry } from '@agent-pay/core';
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
-import { reasonInfo, showReasonLabelForDecision, failureInfo, manualResolveErrorFromEntry } from '../data/compat';
+import {
+  reasonInfo,
+  showReasonLabelForDecision,
+  failureInfo,
+  manualResolveErrorFromEntry,
+  needsResolve,
+} from '../data/compat';
 import { deriveIntentFlow, compactStageIcon } from '../data/intentFlow';
 
 function formatMoney(amount: number, currency: string): string {
@@ -41,9 +47,11 @@ function stageTooltip(stage: ReturnType<typeof deriveIntentFlow>['stages'][numbe
 
 type Props = {
   entries: LedgerEntry[];
+  now: Date;
+  onOpenResolve: (intentId: string) => void;
 };
 
-export function IntentFlows({ entries }: Props) {
+export function IntentFlows({ entries, now, onOpenResolve }: Props) {
   const sorted = [...entries].sort((a, b) =>
     a.recordedAt < b.recordedAt ? 1 : a.recordedAt > b.recordedAt ? -1 : 0,
   );
@@ -56,7 +64,8 @@ export function IntentFlows({ entries }: Props) {
       ) : (
         <ul className="intent-flow-list">
           {sorted.map((entry) => {
-            const flow = deriveIntentFlow(entry);
+            const flow = deriveIntentFlow(entry, now);
+            const showResolve = needsResolve(entry, now);
             const policyReasonStr = policyReason(entry);
             const policyInfo = policyReasonStr ? reasonInfo(policyReasonStr) : null;
             const resolveErr = manualResolveErrorFromEntry(entry);
@@ -80,6 +89,22 @@ export function IntentFlows({ entries }: Props) {
                     )}
                   </span>
                 </div>
+                {flow.resolution && (
+                  <p className="intent-resolution hint" data-testid="intent-resolution">
+                    Resolved {flow.resolution.status} by {flow.resolution.resolvedBy} · {flow.resolution.note}
+                  </p>
+                )}
+                {showResolve && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-resolve-open"
+                    data-testid="btn-open-resolve"
+                    aria-label={`Resolve ${entry.intent.purpose}`}
+                    onClick={() => onOpenResolve(entry.intent.id)}
+                  >
+                    Resolve…
+                  </button>
+                )}
                 <ol className="intent-track" aria-label={`Flow for ${entry.intent.purpose}`}>
                   {flow.stages.map((stage) => (
                     <li

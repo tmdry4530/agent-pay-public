@@ -1,6 +1,6 @@
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import type { Decision, DecisionRecord, LedgerEntry } from '@agent-pay/core';
-import { isSubmitting, needsManualResolve, reasonInfo, failureInfo, manualResolveErrorFromEntry } from './compat';
+import { isSubmitting, isStuckSubmitting, needsManualResolve, reasonInfo, failureInfo, manualResolveErrorFromEntry, STUCK_LABEL } from './compat';
 
 export type TimelineEventKind = 'intent' | 'decision' | 'payment' | 'receipt' | 'resolution';
 
@@ -44,7 +44,7 @@ function decisionRecords(entry: LedgerEntry): DecisionRecord[] {
   return [];
 }
 
-export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
+export function entriesToTimeline(entries: LedgerEntry[], now?: Date): TimelineEvent[] {
   const events: SortableEvent[] = [];
   for (const entry of entries) {
     const intentId = entry.intent.id;
@@ -73,19 +73,21 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
     });
 
     if (isSubmitting(entry)) {
+      const stuck = now !== undefined && isStuckSubmitting(entry, now);
       events.push({
-        id: `${intentId}-submitting`,
-        at: entry.updatedAt,
-        label: 'payment submitting',
+        id: stuck ? `${intentId}-stuck` : `${intentId}-submitting`,
+        at: entry.submission?.at ?? entry.updatedAt,
+        label: stuck ? STUCK_LABEL : 'payment submitting',
         kind: 'payment',
         sortSeq: SEQ.payment - 1,
+        ...(stuck ? { warn: true } : {}),
       });
     } else if (needsManualResolve(entry)) {
       const err = manualResolveErrorFromEntry(entry);
       const info = failureInfo(err);
       events.push({
-        id: `${intentId}-paid-uncertain`,
-        at: entry.updatedAt,
+        id: `${intentId}-needs-check`,
+        at: entry.receipt?.at ?? entry.updatedAt,
         label: 'payment needs check (pending)',
         detail: `${info.label}. ${info.explanation}`,
         kind: 'payment',
@@ -111,19 +113,7 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
     }
 
     if (entry.receipt) {
-      if (needsManualResolve(entry)) {
-        const err = manualResolveErrorFromEntry(entry);
-        const info = failureInfo(err);
-        events.push({
-          id: `${intentId}-receipt-manual`,
-          at: entry.receipt.at,
-          label: 'payment needs check (pending)',
-          detail: `${info.label}. ${info.explanation}`,
-          kind: 'receipt',
-          sortSeq: SEQ.receipt,
-          warn: true,
-        });
-      } else {
+      if (!needsManualResolve(entry)) {
         events.push({
           id: `${intentId}-receipt`,
           at: entry.receipt.at,

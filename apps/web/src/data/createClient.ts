@@ -22,6 +22,9 @@ function mockOptionsFromUrl(): InMemoryClientOptions {
   } else if (manualResolve === 'mismatch') {
     options.payOutcome = 'mismatch';
   }
+  if (params.get('simulateStuck') === '1') {
+    options.payOutcome = 'hang';
+  }
   if (params.get('simulateInvalidPolicy') === '1') {
     options.invalidPolicy = true;
   }

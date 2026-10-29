@@ -21,6 +21,7 @@
 
 import { ReasonCode } from '@agent-pay/core/policy.ts';
 import { FailureCode, PaymentError } from '@agent-pay/core/orchestrator.ts';
+import { DEFAULT_PAY_TIMEOUT_MS } from '@agent-pay/core/timeout.ts';
 import type { LedgerEntry } from '@agent-pay/core';
 import type { PaymentResult } from '../types';
 import { ApiError, apiErrorCode } from './apiError';
@@ -67,6 +68,191 @@ function metaNeedsManualResolve(receipt: LooseRecord | undefined): boolean {
 
 /** UI label for uncertain rail outcomes (never display as PAID). */
 export const NEEDS_CHECK_PENDING_LABEL = 'Needs check (pending)';
+
+export const STUCK_SUBMITTING_MS = DEFAULT_PAY_TIMEOUT_MS;
+
+export const STUCK_LABEL = 'Stuck — needs check';
+
+const RACE_409_SET = new Set<string>(['not_pending', 'already_paid', 'in_progress', 'status_unsupported']);
+
+export const RACE_409_CODES = ['not_pending', 'already_paid', 'in_progress', 'status_unsupported'] as const;
+
+export type Race409Code = (typeof RACE_409_CODES)[number];
+
+export function race409Message(code: Race409Code): { title: string; message: string } {
+  switch (code) {
+    case 'not_pending':
+      return {
+        title: 'Already processed',
+        message:
+          'This intent was already approved or rejected by someone else. Showing the latest state.',
+      };
+    case 'already_paid':
+      return {
+        title: 'Already paid',
+        message: 'This intent has already been paid. No second payment was made. Showing the latest state.',
+      };
+    case 'in_progress':
+      return {
+        title: 'Payment in progress',
+        message:
+          'A payment for this intent is already being submitted. Wait for it to finish; showing the latest state.',
+      };
+    case 'status_unsupported':
+      return {
+        title: 'Status check not supported',
+        message:
+          'This payment rail cannot report payment status, so it cannot be re-checked automatically. Use Resolve to record the outcome manually.',
+      };
+  }
+}
+
+/** Parsed 409 race code from ApiError or PaymentError, when recognized. */
+export function parseRace409(err: unknown): Race409Code | null {
+  if (err instanceof PaymentError) {
+    if (RACE_409_SET.has(err.code)) return err.code as Race409Code;
+    return null;
+  }
+  if (err instanceof ApiError && err.status === 409) {
+    const code = apiErrorCode(err);
+    if (code && RACE_409_SET.has(code)) return code as Race409Code;
+  }
+  return null;
+}
+
+export function isStuckSubmitting(
+  entry: LedgerEntry,
+  now: Date,
+  thresholdMs = STUCK_SUBMITTING_MS,
+): boolean {
+  if (entry.paymentStatus !== 'submitting') return false;
+  const anchor = entry.submission?.at ?? entry.updatedAt;
+  const started = Date.parse(anchor);
+  if (Number.isNaN(started)) return false;
+  return now.getTime() - started > thresholdMs;
+}
+
+export function needsResolve(entry: LedgerEntry, now: Date): boolean {
+  return needsManualResolve(entry) || isStuckSubmitting(entry, now);
+}
+
+export type ResolveFormStatus = 'succeeded' | 'failed';
+
+export type ResolveRequest = {
+  status: ResolveFormStatus;
+  note: string;
+  resolvedBy: string;
+  externalId?: string;
+};
+
+const RESOLVE_FORM_STATUSES = new Set<string>(['succeeded', 'failed']);
+
+export function validateResolveRequest(input: {
+  status?: string;
+  note?: string;
+  resolvedBy?: string;
+  externalId?: string;
+}):
+  | { ok: true; value: ResolveRequest }
+  | { ok: false; errors: Partial<Record<'status' | 'note' | 'resolvedBy' | 'externalId', string>> } {
+  const errors: Partial<Record<'status' | 'note' | 'resolvedBy' | 'externalId', string>> = {};
+
+  const status = typeof input.status === 'string' ? input.status.trim() : '';
+  if (!status) {
+    errors.status = 'Status is required';
+  } else if (!RESOLVE_FORM_STATUSES.has(status)) {
+    errors.status = 'Status must be succeeded or failed';
+  }
+
+  const note = typeof input.note === 'string' ? input.note.trim() : '';
+  if (!note) {
+    errors.note = 'Note is required for the audit record';
+  } else if (note.length > 1000) {
+    errors.note = 'Note must be at most 1000 characters';
+  }
+
+  const resolvedBy = typeof input.resolvedBy === 'string' ? input.resolvedBy.trim() : '';
+  if (!resolvedBy) {
+    errors.resolvedBy = 'Resolved by is required';
+  } else if (resolvedBy.length > 128) {
+    errors.resolvedBy = 'Resolved by must be at most 128 characters';
+  }
+
+  let externalId: string | undefined;
+  if (input.externalId !== undefined && input.externalId !== '') {
+    const ext = typeof input.externalId === 'string' ? input.externalId.trim() : '';
+    if (ext.length > 256) {
+      errors.externalId = 'External ID must be at most 256 characters';
+    } else if (ext.length > 0) {
+      externalId = ext;
+    }
+  }
+
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  return {
+    ok: true,
+    value: {
+      status: status as ResolveFormStatus,
+      note,
+      resolvedBy,
+      ...(externalId !== undefined ? { externalId } : {}),
+    },
+  };
+}
+
+export function describeResolveError(err: unknown): { title: string; message: string } {
+  if (err instanceof PaymentError) {
+    switch (err.code) {
+      case 'no_receipt':
+        return {
+          title: 'Nothing to resolve',
+          message: 'This intent has no receipt to settle manually.',
+        };
+      case 'receipt_not_pending':
+        return {
+          title: 'Already resolved',
+          message: 'Someone else resolved this receipt already. Showing the latest state.',
+        };
+      case 'intent_not_found':
+        return {
+          title: 'Intent not found',
+          message: 'This intent is not in the ledger.',
+        };
+      default:
+        break;
+    }
+  }
+
+  if (err instanceof ApiError) {
+    const code = apiErrorCode(err);
+    const detail = err.detail ?? (err.message.includes(':') ? err.message.slice(err.message.indexOf(':') + 1).trim() : err.message);
+    if (err.status === 0 || code === 'network_error') {
+      return {
+        title: 'API unreachable',
+        message: detail || 'Cannot reach the API.',
+      };
+    }
+    if (code === 'no_receipt') {
+      return { title: 'Nothing to resolve', message: detail || 'No receipt stored for this intent.' };
+    }
+    if (code === 'receipt_not_pending') {
+      return {
+        title: 'Already resolved',
+        message: detail || 'Someone else resolved this receipt already. Showing the latest state.',
+      };
+    }
+    if (code === 'intent_not_found') {
+      return { title: 'Intent not found', message: detail || 'This intent is not in the ledger.' };
+    }
+    if (code === 'invalid_body') {
+      return { title: 'Invalid resolve request', message: detail || err.message };
+    }
+  }
+
+  const message = err instanceof Error ? err.message : String(err);
+  return { title: 'Resolve failed', message };
+}
 
 /** True when a ledger entry (or compatible object) represents payment in flight. */
 export function isSubmitting(entry: unknown): boolean {
@@ -198,10 +384,11 @@ export type AlreadyProcessedOptions = {
   action?: 'approve' | 'reject';
 };
 
-const RACE_CODES = new Set(['not_pending', 'already_paid']);
+const RACE_CODES = new Set<string>(RACE_409_CODES);
 
 /** True when approve/reject lost a race (intent already processed). */
 export function isAlreadyProcessed(err: unknown, options: AlreadyProcessedOptions = {}): boolean {
+  if (parseRace409(err)) return true;
   if (err instanceof PaymentError) {
     return RACE_CODES.has(err.code);
   }

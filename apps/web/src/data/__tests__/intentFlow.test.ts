@@ -2,6 +2,7 @@ import { ReasonCode } from '@agent-pay/core/policy.ts';
 import type { LedgerEntry } from '@agent-pay/core';
 import { describe, expect, it } from 'vitest';
 import { deriveIntentFlow, derivePipelineSteps } from '../intentFlow';
+import { STUCK_LABEL, STUCK_SUBMITTING_MS } from '../compat';
 
 function entry(partial: Partial<LedgerEntry> & Pick<LedgerEntry, 'intent'>): LedgerEntry {
   return {
@@ -243,6 +244,33 @@ describe('deriveIntentFlow', () => {
       }),
     );
     expect(flow.overall).toBe('resolved');
+    expect(flow.resolution).toMatchObject({
+      status: 'succeeded',
+      resolvedBy: 'ops',
+      note: 'manual',
+      at: '2026-01-01T12:10:00.000Z',
+      previousExternalId: 'mock_p',
+    });
+  });
+
+  it('stuck submitting uses STUCK_LABEL', () => {
+    const anchor = '2026-01-01T12:00:00.000Z';
+    const now = new Date(Date.parse(anchor) + STUCK_SUBMITTING_MS + 1000);
+    const flow = deriveIntentFlow(
+      entry({
+        intent: baseIntent,
+        decisions: [
+          { status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, actor: 'policy' },
+        ],
+        paymentStatus: 'submitting',
+        submission: { rail: 'mock', at: anchor },
+        updatedAt: anchor,
+      }),
+      now,
+    );
+    expect(flow.overall).toBe('submitting');
+    expect(flow.overallLabel).toBe(STUCK_LABEL);
+    expect(flow.stages.find((s) => s.id === 'payment')?.detail).toBe(STUCK_LABEL);
   });
 });
 
@@ -251,5 +279,25 @@ describe('derivePipelineSteps', () => {
     const steps = derivePipelineSteps('quote', null, { payInFlight: true });
     const payment = steps.find((s) => s.step === 'payment');
     expect(payment).toMatchObject({ state: 'pending', ariaCurrent: true });
+  });
+
+  it('approved decision with failed payment marks payment error, not decision', () => {
+    const steps = derivePipelineSteps('payment', {
+      intentId: 'i1',
+      status: 'failed',
+      decision: { status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok` },
+      error: 'payment_failed: x',
+    });
+    expect(steps.find((s) => s.step === 'decision')?.state).toBe('done');
+    expect(steps.find((s) => s.step === 'payment')?.state).toBe('error');
+  });
+
+  it('rejected decision still marks decision step as error', () => {
+    const steps = derivePipelineSteps('decision', {
+      intentId: 'i1',
+      status: 'rejected',
+      decision: { status: 'rejected', reason: `${ReasonCode.PerTxLimitExceeded}: too big` },
+    });
+    expect(steps.find((s) => s.step === 'decision')?.state).toBe('error');
   });
 });

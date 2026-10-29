@@ -63,6 +63,22 @@ All payment rails (**Mock**, **PayPal**, **NEAR**) are **fully mocked**. No netw
 
 To demo **pending settlement** (receipt stays `pending` until you click **Refresh status**), open the app with `?simulatePending=1` in the URL (mock client only). Pay returns a pending receipt; one **Refresh status** settles it to succeeded.
 
+## Manual resolve demo ("a human cleans up")
+
+The Resolve form appears only for entries that need a human: an uncertain outcome (`needsManualResolve`) or a payment stuck in `submitting` for longer than the 60 s pay timeout ("Stuck — needs check"). It records status (succeeded | failed), a required note (kept in the audit record), who resolved it, and an optional external ID.
+
+- **Mock mode:** open `?simulateManualResolve=1` (pay times out → needs check) or `?simulateStuck=1` (pay never settles → stuck after 60 s).
+- **HTTP mode (real API):** seed the ledger with real core functions, then start the API on the same file. The seed only writes the ledger; the API has no simulation path.
+
+```bash
+# from the repo root, with the API stopped
+LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm run demo:seed-needs-check
+LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm run api
+VITE_API_BASE=http://127.0.0.1:8787 pnpm --dir apps/web dev
+```
+
+It adds "Buy API credits (rail error)" (adapter threw → needs check) and "Deploy preview (stuck)" (submitting since 2 minutes ago). Use **Resolve…** on either in the Intents panel. `LEDGER_PATH` is required (relative paths resolve from where you ran the command); `RAIL` defaults to `mock`. Use a fresh path if the daily limit is used up. From `apps/web` the same script is `pnpm demo:seed-needs-check`.
+
 ## Demo scenarios
 
 Aligned with the API default policy (`demo-agent`, daily max $200, per-tx max $100, approval above $50):

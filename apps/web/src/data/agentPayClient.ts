@@ -4,7 +4,9 @@ import type {
   PaymentResult,
   Policy,
   Rail,
+  ReceiptResolution,
 } from '@agent-pay/core';
+import type { ResolveRequest } from './compat';
 
 export type { Rail };
 
@@ -43,7 +45,13 @@ export interface AgentPayClient {
     opts?: { approver?: string; note?: string },
   ): Promise<PaymentResult>;
   refresh(intentId: string): Promise<PaymentResult & { changed: boolean }>;
+  resolve(
+    intentId: string,
+    req: ResolveRequest,
+  ): Promise<PaymentResult & { changed: true; resolution: ReceiptResolution }>;
   getLedger(): Promise<LedgerSnapshot>;
   getHealth?(): Promise<{ ok: boolean; rail: string }>;
+  /** HTTP client: ms to add to local time so it matches server `Date` (0 when unknown). */
+  serverClockOffsetMs?(): number;
   reset?(): Promise<void>;
 }

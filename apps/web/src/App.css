@@ -497,9 +497,42 @@ dd {
 }
 
 .human-outcome {
+  margin: 0.5rem 0 0;
   font-weight: 600;
-  margin-top: 0.75rem;
   color: var(--success);
+}
+
+.payment-outcome {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.payment-outcome__label {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.payment-outcome__text {
+  margin: 0.35rem 0 0;
+  font-weight: 600;
+}
+
+.payment-outcome__text--failed {
+  color: var(--danger);
+}
+
+.payment-outcome__text--succeeded {
+  color: var(--success);
+}
+
+.payment-outcome__note {
+  margin: 0.35rem 0 0;
 }
 
 .receipt-status--succeeded {
@@ -638,6 +671,128 @@ dd {
 
 .error-banner--info .error {
   color: var(--text);
+}
+
+.error-banner--info .error-banner__message {
+  margin: 0;
+  color: var(--text);
+}
+
+.resolve-section {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.resolve-form.card-panel,
+.resolve-form {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  background: var(--surface-2);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.resolve-form__heading {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+}
+
+.resolve-form__intro {
+  margin: 0 0 1rem;
+}
+
+.resolve-field {
+  margin: 0 0 0.85rem;
+  border: none;
+  padding: 0;
+  min-width: 0;
+}
+
+.resolve-field legend {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.resolve-field label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.resolve-field input[type='text'],
+.resolve-field textarea {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+}
+
+.resolve-radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+}
+
+.resolve-radio-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+  margin: 0;
+}
+
+.resolve-field__hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+}
+
+.field-error {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--danger);
+}
+
+.resolve-form__error {
+  margin-bottom: 0.85rem;
+}
+
+.resolve-form .btn-primary {
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+@media (min-width: 376px) {
+  .resolve-form .btn-primary {
+    width: auto;
+  }
+}
+
+.resolve-success {
+  margin-top: 1rem;
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, var(--surface-2));
+}
+
+.intent-resolution {
+  margin: 0.25rem 0 0.35rem;
+  font-size: 0.78rem;
+}
+
+.btn-resolve-open {
+  width: auto;
+  margin-bottom: 0.35rem;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.55rem;
 }
 
 .reason-explanation {

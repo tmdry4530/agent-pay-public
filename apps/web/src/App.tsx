@@ -7,22 +7,28 @@ import {
   displayRunStatus,
   failureInfo,
   isAlreadyProcessed,
+  isStuckSubmitting,
   isSubmitting,
   manualResolveBannerText,
   needsManualResolve,
+  needsResolve,
   normalizeTotals,
   reasonInfo,
   showReasonLabelForDecision,
+  STUCK_LABEL,
+  type ResolveRequest,
 } from './data/compat';
 import type { IntentDraft } from './data/agentPayClient';
 import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
 import { describeError, type DescribedError } from './data/describeError';
 import { derivePipelineSteps } from './data/intentFlow';
+import { serverNow } from './data/serverClock';
 import { paymentResultFromLedgerEntry } from './data/ledgerResult';
 import { detectRailMismatch, expectedRailFromSearch, railMismatchMessage } from './data/railQuery';
 import { ApiStatusBanner } from './components/ApiStatusBanner';
 import { ErrorBanner } from './components/ErrorBanner';
+import { ResolveForm } from './components/ResolveForm';
 import { IntentFlows } from './components/IntentFlows';
 import { PendingTimer } from './components/PendingTimer';
 import { PipelineStepper } from './components/PipelineStepper';
@@ -89,7 +95,13 @@ function paymentErrorCode(err: unknown): string | undefined {
 
 type RetryAction = 'policy' | 'approve' | 'refresh';
 
-export default function App() {
+export type AppProps = {
+  clock?: () => Date;
+};
+
+const systemClock = (): Date => new Date();
+
+export default function App({ clock = systemClock }: AppProps) {
   const client = useAgentPayClient();
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [ledgerSnap, setLedgerSnap] = useState<LedgerSnapshot | null>(null);
@@ -111,6 +123,10 @@ export default function App() {
   const [apiConnected, setApiConnected] = useState(true);
   const stepperRef = useRef<HTMLOListElement>(null);
   const retryActionRef = useRef<RetryAction | null>(null);
+  const resolveHeadingRef = useRef<HTMLHeadingElement>(null);
+  const [now, setNow] = useState(() => clock());
+  const [resolveTargetId, setResolveTargetId] = useState<string | null>(null);
+  const [resolveSuccess, setResolveSuccess] = useState<string | null>(null);
 
   const apiBase = import.meta.env.VITE_API_BASE?.trim() ?? '';
   const expectedRail = useMemo(
@@ -195,9 +211,14 @@ export default function App() {
   const perTxMax = policy?.perTxMax ?? 0;
   const requireApprovalAbove = policy?.requireApprovalAbove ?? 0;
 
+  const serverNowDate = useMemo(
+    () => serverNow(now, client.serverClockOffsetMs?.() ?? 0),
+    [now, ledgerSnap, client],
+  );
+
   const timeline = useMemo(
-    () => entriesToTimeline(ledgerSnap?.entries ?? []),
-    [ledgerSnap],
+    () => entriesToTimeline(ledgerSnap?.entries ?? [], serverNowDate),
+    [ledgerSnap, serverNowDate],
   );
 
   const activeIntentId = intent?.id ?? draft?.id;
@@ -208,6 +229,40 @@ export default function App() {
         : undefined,
     [ledgerSnap?.entries, activeIntentId],
   );
+
+  const resolveIntentId = resolveTargetId ?? activeIntentId ?? null;
+  const resolveEntry = useMemo(
+    () =>
+      resolveIntentId
+        ? ledgerSnap?.entries.find((e) => e.intent.id === resolveIntentId)
+        : undefined,
+    [ledgerSnap?.entries, resolveIntentId],
+  );
+  const showResolveForm = Boolean(resolveEntry && needsResolve(resolveEntry, serverNowDate));
+  const resolveStuck = Boolean(resolveEntry && isStuckSubmitting(resolveEntry, serverNowDate));
+
+  const ledgerHasSubmitting = useMemo(
+    () => (ledgerSnap?.entries ?? []).some((e) => e.paymentStatus === 'submitting'),
+    [ledgerSnap?.entries],
+  );
+
+  useEffect(() => {
+    setNow(clock());
+  }, [clock]);
+
+  useEffect(() => {
+    if (!ledgerHasSubmitting) return;
+    const timer = window.setInterval(() => {
+      setNow(clock());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [ledgerHasSubmitting, clock]);
+
+  // Move focus to the form only when the operator explicitly opens it (never on auto-appear).
+  const [resolveFocusTick, setResolveFocusTick] = useState(0);
+  useEffect(() => {
+    if (resolveFocusTick > 0) resolveHeadingRef.current?.focus();
+  }, [resolveFocusTick]);
 
   const pipelineSteps = useMemo(
     () =>
@@ -267,6 +322,8 @@ export default function App() {
     setActionError(null);
     setRefreshNote(null);
     setRefreshHidden(false);
+    setResolveTargetId(null);
+    setResolveSuccess(null);
   }, []);
 
   const selectScenario = (s: DemoScenario) => {
@@ -418,6 +475,50 @@ export default function App() {
     else if (kind === 'refresh') void handleRefreshStatus();
   };
 
+  const handleOpenResolve = useCallback(
+    (intentId: string) => {
+      setResolveTargetId(intentId);
+      setResolveSuccess(null);
+      setResolveFocusTick((t) => t + 1);
+      const entry = ledgerSnap?.entries.find((e) => e.intent.id === intentId);
+      if (entry) {
+        setIntent(entry.intent);
+        const out = paymentResultFromLedgerEntry(entry);
+        setResult(out);
+        setStep(stepFromResult(out));
+      }
+    },
+    [ledgerSnap?.entries],
+  );
+
+  const handleResolveSubmit = useCallback(
+    async (req: ResolveRequest) => {
+      if (!resolveEntry) return;
+      const targetId = resolveEntry.intent.id;
+      try {
+        const out = await client.resolve(targetId, req);
+        if (targetId === activeIntentId) {
+          setResult(out);
+          setStep(out.receipt ? 'receipt' : 'decision');
+          setPayInFlight(false);
+        }
+        await refreshLedger();
+        setResolveTargetId(null);
+        setResolveSuccess(`Resolved as ${req.status} by ${req.resolvedBy}.`);
+      } catch (e) {
+        const code = paymentErrorCode(e);
+        if (code === 'receipt_not_pending') {
+          await refreshLedger();
+          if (targetId === activeIntentId) {
+            await syncIntentFromLedger(targetId);
+          }
+        }
+        throw e;
+      }
+    },
+    [resolveEntry, client, activeIntentId, refreshLedger, syncIntentFromLedger],
+  );
+
   const decision = result?.decision ?? null;
   const humanOutcome =
     decision && humanOutcomeText(decision.reason, DEFAULT_APPROVER);
@@ -427,6 +528,36 @@ export default function App() {
     result?.receipt?.status === 'pending' &&
     (needsManualResolve(result) ||
       (currentLedgerEntry !== undefined && needsManualResolve(currentLedgerEntry)));
+  const paymentResolution = currentLedgerEntry?.resolution;
+  const paymentOutcomeText = (() => {
+    if (!result) return null;
+    if (paymentResolution) {
+      if (paymentResolution.status === 'failed') {
+        return `Payment failed — resolved by ${paymentResolution.resolvedBy}`;
+      }
+      if (paymentResolution.status === 'succeeded') {
+        return `Payment succeeded — resolved by ${paymentResolution.resolvedBy}`;
+      }
+      return null;
+    }
+    if (result.status === 'rejected' || result.status === 'needs_approval') return null;
+    if (result.status === 'failed') return 'Payment failed';
+    if (result.status === 'paid' && !needsManualResolve(result)) return 'Payment succeeded';
+    return null;
+  })();
+  const paymentOutcomeTone =
+    paymentOutcomeText == null
+      ? null
+      : paymentOutcomeText.startsWith('Payment failed')
+        ? 'failed'
+        : paymentOutcomeText.startsWith('Payment succeeded')
+          ? 'succeeded'
+          : null;
+  const showPaymentFailureDetail =
+    result &&
+    result.error &&
+    (result.status === 'failed' || manualResolvePending) &&
+    !paymentResolution;
   const canReset = client.kind === 'mock' && client.reset !== undefined;
 
   const headerBadge =
@@ -640,15 +771,6 @@ export default function App() {
               data-testid="decision"
             >
               <h3>Decision</h3>
-              {result && (
-                <span
-                  className={`result-badge status-${result.status}${manualResolvePending ? ' status-needs-check' : ''}`}
-                  data-testid="result-status"
-                  aria-live="polite"
-                >
-                  {displayRunStatus(result, currentLedgerEntry) ?? result.status.replace('_', ' ')}
-                </span>
-              )}
               <p className="decision-status">{decision.status.replace('_', ' ')}</p>
               {reasonParts && (
                 <>
@@ -666,20 +788,44 @@ export default function App() {
                   {reasonParts.detail && <p>{reasonParts.detail}</p>}
                 </>
               )}
-              {result?.status === 'failed' && result.error && (
-                <p className="failure-detail hint" data-testid="payment-failure-detail">
-                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
-                </p>
-              )}
-              {manualResolvePending && result?.error && (
-                <p className="failure-detail hint" data-testid="payment-failure-detail">
-                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
-                </p>
-              )}
               {humanOutcome && (
                 <p className="human-outcome" data-testid="human-outcome">
                   {humanOutcome}
                 </p>
+              )}
+              {result && (
+                <div className="payment-outcome" data-testid="payment-outcome">
+                  <p className="payment-outcome__label">
+                    {result.status === 'rejected' || result.status === 'needs_approval' ? 'Status' : 'Payment outcome'}
+                  </p>
+                  <span
+                    className={`result-badge status-${result.status}${manualResolvePending ? ' status-needs-check' : ''}`}
+                    data-testid="result-status"
+                    aria-live="polite"
+                  >
+                    {displayRunStatus(result, currentLedgerEntry) ?? result.status.replace('_', ' ')}
+                  </span>
+                  {paymentOutcomeText && (
+                    <p
+                      className={
+                        paymentOutcomeTone
+                          ? `payment-outcome__text payment-outcome__text--${paymentOutcomeTone}`
+                          : 'payment-outcome__text'
+                      }
+                      data-testid="payment-outcome-text"
+                    >
+                      {paymentOutcomeText}
+                    </p>
+                  )}
+                  {paymentResolution?.note && (
+                    <p className="payment-outcome__note hint">{paymentResolution.note}</p>
+                  )}
+                  {showPaymentFailureDetail && (
+                    <p className="failure-detail hint" data-testid="payment-failure-detail">
+                      {failureInfo(result.error!).label}. {failureInfo(result.error!).explanation}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -744,6 +890,35 @@ export default function App() {
                 </p>
               )}
             </article>
+          )}
+
+          {resolveSuccess && (
+            <p className="resolve-success status-banner" data-testid="resolve-success" role="status">
+              {resolveSuccess}
+            </p>
+          )}
+
+          {showResolveForm && resolveEntry && (
+            <div className="resolve-section">
+              {resolveStuck && (
+                <div
+                  className="status-banner status-banner--warn"
+                  data-testid="stuck-submitting"
+                  role="status"
+                >
+                  <p className="status-banner__title">{STUCK_LABEL}</p>
+                  <p className="hint">
+                    No result from the rail after 60 s. The payment may or may not have gone through.
+                  </p>
+                </div>
+              )}
+              <ResolveForm
+                entry={resolveEntry}
+                stuck={resolveStuck}
+                headingRef={resolveHeadingRef}
+                onResolve={handleResolveSubmit}
+              />
+            </div>
           )}
         </section>
 
@@ -814,7 +989,7 @@ export default function App() {
                   >
                     <span className="ledger-type">{ev.label}</span>
                     <span className="ledger-time">{formatTime(ev.at)}</span>
-                    {ev.detail && (
+                    {ev.detail && ev.kind !== 'resolution' && (
                       <span className="ledger-detail wrap-anywhere">{ev.detail}</span>
                     )}
                     {ev.kind === 'decision' &&
@@ -827,12 +1002,12 @@ export default function App() {
                     {ev.actor && (
                       <span className="ledger-actor" data-testid="ledger-actor">
                         by {ev.actor}
+                        {ev.kind === 'resolution' && ev.detail ? ` · ${ev.detail}` : ''}
                       </span>
                     )}
-                    {ev.kind === 'resolution' && ev.previousExternalId !== undefined && (
+                    {ev.kind === 'resolution' && ev.previousExternalId !== undefined && ev.previousExternalId !== '' && (
                       <span className="ledger-resolution wrap-anywhere" data-testid="ledger-resolution">
-                        {ev.actor} · {ev.detail} · {formatTime(ev.at)} · previous:{' '}
-                        {ev.previousExternalId}
+                        previous: {ev.previousExternalId}
                       </span>
                     )}
                   </li>
@@ -842,7 +1017,11 @@ export default function App() {
           </div>
 
           {!initialLoading && apiConnected && (
-            <IntentFlows entries={ledgerSnap?.entries ?? []} />
+            <IntentFlows
+              entries={ledgerSnap?.entries ?? []}
+              now={serverNowDate}
+              onOpenResolve={handleOpenResolve}
+            />
           )}
         </aside>
       </main>

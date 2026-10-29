@@ -1,5 +1,5 @@
 import { ApiError, apiErrorCode } from './apiError';
-import { isAlreadyProcessed, type AlreadyProcessedOptions } from './compat';
+import { isAlreadyProcessed, parseRace409, race409Message, type AlreadyProcessedOptions, type Race409Code } from './compat';
 
 export type DescribedErrorKind =
   | 'network'
@@ -29,13 +29,16 @@ function splitMessage(message: string): { code: string; detail: string } {
 
 export function describeError(err: unknown, context: DescribeErrorContext = {}): DescribedError {
   if (isAlreadyProcessed(err, context)) {
+    const parsed = parseRace409(err);
+    const code = parsed ?? apiErrorCode(err) ?? 'not_pending';
+    const raceCode: Race409Code = parsed ?? 'not_pending';
+    const { title, message } = race409Message(raceCode);
     return {
       kind: 'already_processed',
       status: err instanceof ApiError ? err.status : 409,
-      code: apiErrorCode(err) ?? 'not_pending',
-      title: 'Already processed',
-      message:
-        'This intent was already approved or rejected by someone else. Showing the latest state.',
+      code,
+      title,
+      message,
       hint: '',
       retryable: false,
     };
