@@ -1,10 +1,20 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import { PaymentError } from '@agent-pay/core/orchestrator.ts';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, apiErrorCode } from './data/apiError';
+import { apiErrorCode } from './data/apiError';
 import type { IntentDraft } from './data/agentPayClient';
 import { entriesToTimeline, humanOutcomeText } from './data/ledgerTimeline';
 import { useAgentPayClient } from './data/useAgentPayClient';
+import { describeError, type DescribedError } from './data/describeError';
+import { derivePipelineSteps } from './data/intentFlow';
+import { expectedRailFromSearch, railMismatchMessage } from './data/railQuery';
+import { ApiStatusBanner } from './components/ApiStatusBanner';
+import { ErrorBanner } from './components/ErrorBanner';
+import { IntentFlows } from './components/IntentFlows';
+import { PendingTimer } from './components/PendingTimer';
+import { PipelineStepper } from './components/PipelineStepper';
+import { RailMismatchBanner } from './components/RailMismatchBanner';
+import { ActionButton, GaugeSkeleton, LedgerSkeleton } from './components/Skeleton';
 import {
   DEMO_SCENARIOS,
   type DemoScenario,
@@ -16,26 +26,6 @@ import {
   type PaymentResult,
 } from './types';
 import './App.css';
-
-const STEP_ORDER: PipelineStep[] = [
-  'task',
-  'quote',
-  'policy',
-  'decision',
-  'approval',
-  'payment',
-  'receipt',
-];
-
-const STEP_LABELS: Record<PipelineStep, string> = {
-  task: 'Task',
-  quote: 'Quote',
-  policy: 'Policy',
-  decision: 'Decision',
-  approval: 'Approval',
-  payment: 'Payment',
-  receipt: 'Receipt',
-};
 
 const DEFAULT_APPROVER = 'demo-operator';
 
@@ -74,22 +64,7 @@ function paymentErrorCode(err: unknown): string | undefined {
   return apiErrorCode(err);
 }
 
-function activeStepIndex(
-  step: PipelineStep,
-  result: PaymentResult | null,
-): number {
-  if (result?.receipt) return STEP_ORDER.indexOf('receipt');
-  if (result?.status === 'paid' || result?.status === 'failed') {
-    return STEP_ORDER.indexOf('payment');
-  }
-  if (result?.status === 'needs_approval' && step === 'approval') {
-    return STEP_ORDER.indexOf('approval');
-  }
-  if (result) return STEP_ORDER.indexOf('decision');
-  if (step === 'policy') return STEP_ORDER.indexOf('policy');
-  if (step === 'quote') return STEP_ORDER.indexOf('quote');
-  return STEP_ORDER.indexOf('task');
-}
+type RetryAction = 'policy' | 'approve' | 'refresh';
 
 export default function App() {
   const client = useAgentPayClient();
@@ -99,14 +74,25 @@ export default function App() {
   const [draft, setDraft] = useState<IntentDraft | null>(null);
   const [intent, setIntent] = useState<PaymentIntent | null>(null);
   const [result, setResult] = useState<PaymentResult | null>(null);
-  const [rail, setRail] = useState<Rail>('mock');
+  const [rail, setRail] = useState<Rail>(
+    () => expectedRailFromSearch(window.location.search) ?? 'mock',
+  );
   const [step, setStep] = useState<PipelineStep>('task');
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<DescribedError | null>(null);
   const [busy, setBusy] = useState(false);
   const [serverRail, setServerRail] = useState<string | null>(null);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [refreshHidden, setRefreshHidden] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [apiConnected, setApiConnected] = useState(true);
   const stepperRef = useRef<HTMLOListElement>(null);
+  const retryActionRef = useRef<RetryAction | null>(null);
+
+  const apiBase = import.meta.env.VITE_API_BASE?.trim() ?? '';
+  const expectedRail = useMemo(
+    () => expectedRailFromSearch(window.location.search),
+    [],
+  );
 
   const refreshLedger = useCallback(async () => {
     const snap = await client.getLedger();
@@ -117,25 +103,48 @@ export default function App() {
     setPolicy(await client.getPolicy());
   }, [client]);
 
-  useEffect(() => {
-    void refreshPolicy();
-    void refreshLedger();
-  }, [refreshPolicy, refreshLedger]);
+  const loadConnectionData = useCallback(async () => {
+    if (client.kind !== 'http') {
+      setApiConnected(true);
+      setInitialLoading(true);
+      try {
+        const [p, l] = await Promise.all([client.getPolicy(), client.getLedger()]);
+        setPolicy(p);
+        setLedgerSnap(l);
+      } catch {
+        /* mock should not fail */
+      } finally {
+        setInitialLoading(false);
+      }
+      return;
+    }
+
+    setInitialLoading(true);
+    try {
+      const healthP = client.getHealth?.();
+      const [p, l, health] = await Promise.all([
+        client.getPolicy(),
+        client.getLedger(),
+        healthP ?? Promise.resolve({ ok: true, rail: 'mock' }),
+      ]);
+      setPolicy(p);
+      setLedgerSnap(l);
+      setServerRail(health.rail);
+      setApiConnected(true);
+      setActionError(null);
+    } catch {
+      setApiConnected(false);
+      setPolicy(null);
+      setLedgerSnap(null);
+      setServerRail(null);
+    } finally {
+      setInitialLoading(false);
+    }
+  }, [client]);
 
   useEffect(() => {
-    if (client.kind !== 'http' || client.getHealth === undefined) return;
-    const getHealth = client.getHealth;
-    void (async () => {
-      try {
-        const health = await getHealth();
-        setServerRail(health.rail);
-      } catch (e) {
-        setError(
-          e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Health check failed',
-        );
-      }
-    })();
-  }, [client]);
+    void loadConnectionData();
+  }, [loadConnectionData]);
 
   const currency = policy?.currency ?? 'USD';
   const agentId = policy?.agentId ?? 'demo-agent';
@@ -149,21 +158,33 @@ export default function App() {
     [ledgerSnap],
   );
 
-  const currentIdx = activeStepIndex(step, result);
+  const pipelineSteps = useMemo(() => derivePipelineSteps(step, result), [step, result]);
+
+  const currentIdx = pipelineSteps.findIndex((s) => s.state === 'current');
+  const currentStepView = pipelineSteps[currentIdx >= 0 ? currentIdx : 0]!;
+  const mobileExtra =
+    currentStepView.state === 'skipped'
+      ? ' (skipped)'
+      : currentStepView.state === 'error'
+        ? ' (rejected/failed)'
+        : currentStepView.state === 'pending'
+          ? ' (pending)'
+          : '';
+  const mobileLabel = `Step ${(currentIdx >= 0 ? currentIdx : 0) + 1} of ${pipelineSteps.length} · ${currentStepView.label}${mobileExtra}`;
 
   useEffect(() => {
     const el = stepperRef.current?.querySelector('.stepper__step.is-current');
     if (el && 'scrollIntoView' in el && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
     }
-  }, [currentIdx]);
+  }, [currentStepView.step]);
 
   const clearRun = useCallback(() => {
     setDraft(null);
     setIntent(null);
     setResult(null);
     setStep('task');
-    setError(null);
+    setActionError(null);
     setRefreshNote(null);
     setRefreshHidden(false);
   }, []);
@@ -175,7 +196,7 @@ export default function App() {
 
   const handleQuote = async () => {
     if (!scenario || !policy) return;
-    setError(null);
+    setActionError(null);
     const nextDraft: IntentDraft = {
       agentId: policy.agentId,
       payee: scenario.task.payee,
@@ -194,9 +215,10 @@ export default function App() {
   const handlePolicyPay = async () => {
     if (!draft) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     setRefreshNote(null);
     setRefreshHidden(false);
+    retryActionRef.current = 'policy';
     try {
       const out = await client.submitIntent(draft, rail);
       setIntent(out.intent);
@@ -209,7 +231,7 @@ export default function App() {
       }
       await refreshLedger();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Request failed');
+      setActionError(describeError(e));
     } finally {
       setBusy(false);
     }
@@ -218,16 +240,17 @@ export default function App() {
   const handleApprove = async () => {
     if (!intent) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     setRefreshNote(null);
     setRefreshHidden(false);
+    retryActionRef.current = 'approve';
     try {
       const out = await client.approve(intent.id, DEFAULT_APPROVER);
       setResult(out);
       setStep(out.receipt ? 'receipt' : 'decision');
       await refreshLedger();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Approval failed');
+      setActionError(describeError(e));
     } finally {
       setBusy(false);
     }
@@ -236,14 +259,14 @@ export default function App() {
   const handleDeny = async () => {
     if (!intent) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const out = await client.reject(intent.id, { approver: DEFAULT_APPROVER });
       setResult(out);
       setStep('decision');
       await refreshLedger();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Reject failed');
+      setActionError(describeError(e));
     } finally {
       setBusy(false);
     }
@@ -252,7 +275,7 @@ export default function App() {
   const handleReset = async () => {
     if (!client.reset) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await client.reset();
       setScenario(null);
@@ -267,8 +290,9 @@ export default function App() {
   const handleRefreshStatus = async () => {
     if (!intent) return;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     setRefreshNote(null);
+    retryActionRef.current = 'refresh';
     try {
       const out = await client.refresh(intent.id);
       setResult(out);
@@ -286,13 +310,18 @@ export default function App() {
         setRefreshHidden(true);
         setRefreshNote(null);
       } else {
-        setError(
-          e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Refresh failed',
-        );
+        setActionError(describeError(e));
       }
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleRetryAction = () => {
+    const kind = retryActionRef.current;
+    if (kind === 'policy') void handlePolicyPay();
+    else if (kind === 'approve') void handleApprove();
+    else if (kind === 'refresh') void handleRefreshStatus();
   };
 
   const decision = result?.decision ?? null;
@@ -303,7 +332,7 @@ export default function App() {
 
   const headerBadge =
     client.kind === 'http'
-      ? `API: ${import.meta.env.VITE_API_BASE?.trim() ?? ''}`
+      ? `API: ${apiBase}`
       : 'MOCK — no real funds';
 
   const quoteIntent = draft
@@ -313,6 +342,31 @@ export default function App() {
         createdAt: draft.createdAt ?? '—',
       }
     : null;
+
+  const pipelineDisabled = !apiConnected || busy;
+  const railMismatch =
+    client.kind === 'http' &&
+    expectedRail &&
+    serverRail !== null &&
+    serverRail !== expectedRail;
+  const railMismatchMsg =
+    railMismatch && expectedRail
+      ? railMismatchMessage(apiBase, serverRail!, expectedRail)
+      : null;
+
+  const receiptRailMismatch =
+    client.kind === 'http' &&
+    serverRail &&
+    result?.receipt &&
+    result.receipt.rail !== serverRail;
+
+  const showRailBanner =
+    railMismatchMsg ||
+    (receiptRailMismatch
+      ? railMismatchMessage(apiBase, serverRail!, result!.receipt!.rail as Rail)
+      : null);
+
+  const payBlocked = pipelineDisabled || !!showRailBanner;
 
   return (
     <div className="app">
@@ -342,7 +396,8 @@ export default function App() {
                 type="button"
                 className={`scenario-card${scenario?.id === s.id ? ' is-selected' : ''}`}
                 data-testid={s.testId}
-                disabled={busy}
+                aria-pressed={scenario?.id === s.id}
+                disabled={busy || !apiConnected}
                 onClick={() => selectScenario(s)}
               >
                 <strong>{s.label}</strong>
@@ -354,34 +409,38 @@ export default function App() {
             ))}
           </div>
           {canReset && (
-            <button
-              type="button"
-              className="btn btn-ghost"
+            <ActionButton
+              className="btn-ghost"
               data-testid="btn-reset"
               disabled={busy}
+              busy={busy}
               onClick={() => void handleReset()}
             >
               Reset demo
-            </button>
+            </ActionButton>
           )}
         </section>
 
         <section className="panel flow">
           <h2>Payment pipeline</h2>
-          <p className="stepper-mobile-label" aria-live="polite">
-            Step {currentIdx + 1} of {STEP_ORDER.length} · {STEP_LABELS[STEP_ORDER[currentIdx]!]}
-          </p>
-          <ol className="stepper" aria-label="Pipeline steps" ref={stepperRef}>
-            {STEP_ORDER.map((s, i) => (
-              <li
-                key={s}
-                className={`stepper__step${i <= currentIdx ? ' is-active' : ''}${i === currentIdx ? ' is-current' : ''}`}
-              >
-                <span className="stepper__dot">{i + 1}</span>
-                <span className="stepper__label">{STEP_LABELS[s]}</span>
-              </li>
-            ))}
-          </ol>
+
+          {client.kind === 'http' && !apiConnected && (
+            <ApiStatusBanner
+              baseUrl={apiBase}
+              busy={busy}
+              onRetry={() => void loadConnectionData()}
+            />
+          )}
+
+          {showRailBanner && (
+            <RailMismatchBanner
+              message={showRailBanner}
+              busy={busy}
+              onRecheck={() => void loadConnectionData()}
+            />
+          )}
+
+          <PipelineStepper steps={pipelineSteps} stepperRef={stepperRef} mobileLabel={mobileLabel} />
 
           {scenario && (
             <div className="task-banner">
@@ -400,7 +459,8 @@ export default function App() {
                   type="button"
                   className={`rail-btn${isActive ? ' is-active' : ''}`}
                   data-testid={`rail-${r}`}
-                  disabled={busy || !!result || isHttp}
+                  aria-pressed={isActive}
+                  disabled={payBlocked || !!result || isHttp}
                   onClick={() => setRail(r)}
                 >
                   {r === 'mock' ? 'Mock' : r === 'paypal' ? 'PayPal' : 'NEAR'}
@@ -415,51 +475,57 @@ export default function App() {
           )}
 
           <div className="actions">
-            <button
-              type="button"
-              className="btn btn-primary"
+            <ActionButton
+              className="btn-primary"
               data-testid="btn-quote"
-              disabled={!scenario || !!draft || busy}
+              disabled={!scenario || !!draft || payBlocked}
+              busy={busy}
               onClick={() => void handleQuote()}
             >
               Get quote
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
+            </ActionButton>
+            <ActionButton
+              className="btn-primary"
               data-testid="btn-policy"
-              disabled={!draft || !!result || busy}
+              disabled={!draft || !!result || payBlocked}
+              busy={busy}
               onClick={() => void handlePolicyPay()}
             >
               Run policy check &amp; pay
-            </button>
+            </ActionButton>
             {result?.status === 'needs_approval' &&
               reasonCode(result.decision) !== ReasonCode.ApprovedByHuman &&
               reasonCode(result.decision) !== ReasonCode.RejectedByHuman && (
                 <>
-                  <button
-                    type="button"
-                    className="btn btn-success"
+                  <ActionButton
+                    className="btn-success"
                     data-testid="btn-approve"
-                    disabled={busy}
+                    disabled={payBlocked}
+                    busy={busy}
                     onClick={() => void handleApprove()}
                   >
                     Approve
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
+                  </ActionButton>
+                  <ActionButton
+                    className="btn-danger"
                     data-testid="btn-deny"
-                    disabled={busy}
+                    disabled={payBlocked}
+                    busy={busy}
                     onClick={() => void handleDeny()}
                   >
                     Deny
-                  </button>
+                  </ActionButton>
                 </>
               )}
           </div>
 
-          {error && <p className="error">{error}</p>}
+          {actionError && (
+            <ErrorBanner
+              error={actionError}
+              onRetry={actionError.retryable ? handleRetryAction : undefined}
+              onDismiss={() => setActionError(null)}
+            />
+          )}
 
           {quoteIntent && (
             <div className="quote-card">
@@ -467,7 +533,7 @@ export default function App() {
               <dl>
                 <div>
                   <dt>ID</dt>
-                  <dd className="mono">{quoteIntent.id}</dd>
+                  <dd className="mono wrap-anywhere">{quoteIntent.id}</dd>
                 </div>
                 <div>
                   <dt>Payee</dt>
@@ -491,6 +557,7 @@ export default function App() {
                 <span
                   className={`result-badge status-${result.status}`}
                   data-testid="result-status"
+                  aria-live="polite"
                 >
                   {result.status.replace('_', ' ')}
                 </span>
@@ -537,23 +604,26 @@ export default function App() {
                 </div>
                 <div>
                   <dt>External ID</dt>
-                  <dd className="mono">{result.receipt.externalId}</dd>
+                  <dd className="mono wrap-anywhere">{result.receipt.externalId}</dd>
                 </div>
                 <div>
                   <dt>At</dt>
                   <dd>{formatTime(result.receipt.at)}</dd>
                 </div>
               </dl>
+              {result.receipt.status === 'pending' && (
+                <PendingTimer sinceIso={result.receipt.at} />
+              )}
               {result.receipt.status === 'pending' && !refreshHidden && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-refresh"
+                <ActionButton
+                  className="btn-ghost btn-refresh"
                   data-testid="btn-refresh"
-                  disabled={busy}
+                  disabled={payBlocked}
+                  busy={busy}
                   onClick={() => void handleRefreshStatus()}
                 >
                   Refresh status
-                </button>
+                </ActionButton>
               )}
               {refreshNote && (
                 <p className="refresh-note" data-testid="refresh-note">
@@ -567,28 +637,43 @@ export default function App() {
         <aside className="sidebar">
           <div className="panel gauge-panel" data-testid="gauge">
             <h2>Spending limit</h2>
-            <p className="cap-note">
-              Per-tx max {formatMoney(perTxMax, currency)} · approval above{' '}
-              {formatMoney(requireApprovalAbove, currency)}
-            </p>
-            <div className="gauge">
-              <div
-                className="gauge__fill"
-                style={{
-                  width: `${dailyMax > 0 ? Math.min(100, (spentToday / dailyMax) * 100) : 0}%`,
-                }}
-              />
-            </div>
-            <p className="gauge__labels">
-              <span>Spent today {formatMoney(spentToday, currency)}</span>
-              <span>Daily max {formatMoney(dailyMax, currency)}</span>
-            </p>
+            {initialLoading ? (
+              <GaugeSkeleton testId="gauge-loading" label="gauge" />
+            ) : !apiConnected ? (
+              <p className="hint unavailable">Spending data unavailable — API not connected.</p>
+            ) : (
+              <>
+                <p className="cap-note">
+                  Per-tx max {formatMoney(perTxMax, currency)} · approval above{' '}
+                  {formatMoney(requireApprovalAbove, currency)}
+                </p>
+                <div className="gauge">
+                  <div
+                    className="gauge__fill"
+                    style={{
+                      width: `${dailyMax > 0 ? Math.min(100, (spentToday / dailyMax) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+                <p className="gauge__labels">
+                  <span>Spent today {formatMoney(spentToday, currency)}</span>
+                  <span>Daily max {formatMoney(dailyMax, currency)}</span>
+                </p>
+              </>
+            )}
           </div>
 
           <div className="panel ledger-panel" data-testid="ledger">
             <h2>Ledger</h2>
-            {timeline.length === 0 ? (
-              <p className="hint">Events appear as you progress.</p>
+            {initialLoading ? (
+              <LedgerSkeleton testId="ledger-loading" label="ledger" />
+            ) : !apiConnected ? (
+              <p className="hint unavailable">Ledger unavailable — API not connected.</p>
+            ) : timeline.length === 0 ? (
+              <>
+                <p className="hint">Events appear as you progress.</p>
+                <p className="hint">Choose a demo scenario to start the pipeline.</p>
+              </>
             ) : (
               <ul className="ledger-list">
                 {timeline.map((ev) => (
@@ -599,14 +684,16 @@ export default function App() {
                   >
                     <span className="ledger-type">{ev.label}</span>
                     <span className="ledger-time">{formatTime(ev.at)}</span>
-                    {ev.detail && <span className="ledger-detail">{ev.detail}</span>}
+                    {ev.detail && (
+                      <span className="ledger-detail wrap-anywhere">{ev.detail}</span>
+                    )}
                     {ev.actor && (
                       <span className="ledger-actor" data-testid="ledger-actor">
                         by {ev.actor}
                       </span>
                     )}
                     {ev.kind === 'resolution' && ev.previousExternalId !== undefined && (
-                      <span className="ledger-resolution" data-testid="ledger-resolution">
+                      <span className="ledger-resolution wrap-anywhere" data-testid="ledger-resolution">
                         {ev.actor} · {ev.detail} · {formatTime(ev.at)} · previous:{' '}
                         {ev.previousExternalId}
                       </span>
@@ -616,6 +703,10 @@ export default function App() {
               </ul>
             )}
           </div>
+
+          {!initialLoading && apiConnected && (
+            <IntentFlows entries={ledgerSnap?.entries ?? []} />
+          )}
         </aside>
       </main>
     </div>

@@ -1,16 +1,18 @@
 :root {
   color-scheme: dark;
+  /* Token hex values documented in src/lib/colorTokens.ts (contrast tests). */
   --bg: #0c0f14;
   --surface: #141a24;
   --surface-2: #1c2433;
   --border: #2a3548;
   --text: #e8edf5;
-  --muted: #8b9bb5;
-  --accent: #5b8cff;
-  --accent-dim: #3d5fa8;
-  --success: #3ecf8e;
-  --danger: #f07178;
-  --warn: #e6b450;
+  --muted: #9aa8c0;
+  --accent: #3d6fd9;
+  --accent-dim: #2f5aa8;
+  --success: #2db872;
+  --danger: #e85c66;
+  --warn: #d4a017;
+  --badge-warn: #e0b84a;
   --radius: 12px;
   --font: 'DM Sans', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -38,6 +40,30 @@ body {
 button {
   font-family: inherit;
   cursor: pointer;
+}
+
+button:focus-visible,
+.scenario-card:focus-visible,
+.rail-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.wrap-anywhere {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mono {
