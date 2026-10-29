@@ -2,29 +2,27 @@ import { randomUUID } from 'node:crypto';
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
   Ledger,
+  LedgerError,
   PaymentError,
+  accountingDay,
   approve,
-  countsTowardDailyTotal,
+  currencyDecimals,
+  policyProblem,
   reject,
   refreshIntent,
   runPayment,
-  utcDay,
+  toMinorUnits,
+  type LedgerEntry,
+  type LedgerErrorCode,
   type PaymentAdapter,
   type PaymentErrorCode,
   type Policy,
 } from '@agent-pay/core';
-import { ValidationError, parseDecisionBody, parseIntentBody, parsePolicy } from './validate.ts';
+import { ValidationError, parseDecisionBody, parseIdempotencyKey, parseIntentBody, parsePolicy } from './validate.ts';
 import { resolveRoute } from './resolve-route.ts';
+import { DEFAULT_POLICY } from './policy-defaults.ts';
 
-/** Seed policy for demos. Replace at runtime with PUT /policy. */
-export const DEFAULT_POLICY: Policy = {
-  agentId: 'demo-agent',
-  perTxMax: 100,
-  dailyMax: 200,
-  allowedPayees: ['openai-api', 'anthropic-api', 'vercel', 'near-compute'],
-  requireApprovalAbove: 50,
-  currency: 'USD',
-};
+export { DEFAULT_POLICY } from './policy-defaults.ts';
 
 /** Max request body size in bytes. */
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -69,6 +67,16 @@ const PAYMENT_ERROR_STATUS: Record<PaymentErrorCode, number> = {
   receipt_not_pending: 409,
   status_unsupported: 409,
   status_check_failed: 502,
+};
+
+const LEDGER_ERROR_STATUS: Record<LedgerErrorCode, number> = {
+  precondition_failed: 409,
+  not_found: 404,
+  duplicate_intent: 409,
+  invalid_input: 400,
+  lock_timeout: 503,
+  ledger_corrupt: 503,
+  ledger_missing: 503,
 };
 
 const ORIGIN_RE = /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
@@ -117,7 +125,14 @@ export function createApp(options: AppOptions) {
       pattern: /^\/intents$/,
       methods: {
         POST: async (req) => {
-          const intent = parseIntentBody(await readJson(req), { id: newId, now });
+          const raw = await readJson(req);
+          const idempotencyKey = parseIdempotencyKey(req.headers['idempotency-key']);
+          const intent = parseIntentBody(raw, { id: newId, now, idempotencyKey });
+          rejectExcessAmountDecimals(intent.amount, intent.currency);
+          if (shouldReuseStoredCreatedAt(raw, idempotencyKey)) {
+            const existing = await ledger.get(intent.id);
+            if (existing) intent.createdAt = existing.intent.createdAt;
+          }
           const result = await runPayment(intent, policy, ledger, adapter);
           return { status: result.replayed ? 200 : 201, body: { ...result, intent } };
         },
@@ -146,7 +161,18 @@ export function createApp(options: AppOptions) {
       methods: {
         POST: async (req, [id]) => {
           await readJson(req);
-          return { status: 200, body: await refreshIntent(id!, ledger, adapter) };
+          const intentId = id!;
+          try {
+            return { status: 200, body: await refreshIntent(intentId, ledger, adapter) };
+          } catch (err) {
+            if (err instanceof PaymentError && err.code === 'status_unsupported') {
+              const entry = await ledger.get(intentId);
+              if (entry && entryNeedsManualResolve(entry)) {
+                throw new HttpError(409, `status_unsupported: use POST /intents/${intentId}/resolve`);
+              }
+            }
+            throw err;
+          }
         },
       },
     },
@@ -156,13 +182,16 @@ export function createApp(options: AppOptions) {
       methods: {
         GET: async () => {
           const entries = await ledger.list();
-          const day = utcDay(now());
-          const byAgent: Record<string, number> = {};
+          const day = accountingDayForClock(now());
+          const totals: Record<string, Record<string, number>> = {};
+          const seen = new Set<string>();
           for (const e of entries) {
-            if (utcDay(e.intent.createdAt) !== day || !countsTowardDailyTotal(e)) continue;
-            byAgent[e.intent.agentId] = (byAgent[e.intent.agentId] ?? 0) + e.intent.amount;
+            const agentId = e.intent.agentId;
+            if (seen.has(agentId)) continue;
+            seen.add(agentId);
+            totals[agentId] = await ledger.dailyTotals(agentId, day);
           }
-          return { status: 200, body: { entries, today: { day, totals: byAgent } } };
+          return { status: 200, body: { entries, today: { day, totals } } };
         },
       },
     },
@@ -171,7 +200,10 @@ export function createApp(options: AppOptions) {
       methods: {
         GET: async () => ({ status: 200, body: policy }),
         PUT: async (req) => {
-          policy = parsePolicy(await readJson(req));
+          const next = parsePolicy(await readJson(req));
+          const problem = policyProblem(next, { dailyTotal: 0 });
+          if (problem !== undefined) throw new ValidationError('invalid_policy', problem);
+          policy = next;
           return { status: 200, body: policy };
         },
       },
@@ -181,7 +213,10 @@ export function createApp(options: AppOptions) {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const origin = req.headers.origin;
     const cors: Record<string, string> = { Vary: 'Origin' };
-    if (isAllowedOrigin(origin)) cors['Access-Control-Allow-Origin'] = origin;
+    if (isAllowedOrigin(origin)) {
+      cors['Access-Control-Allow-Origin'] = origin;
+      cors['Access-Control-Expose-Headers'] = 'Date';
+    }
     try {
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
       let match: { route: Route; params: string[] } | undefined;
@@ -199,7 +234,7 @@ export function createApp(options: AppOptions) {
         const headers: Record<string, string> = { ...cors, Allow: allow };
         if (cors['Access-Control-Allow-Origin']) {
           headers['Access-Control-Allow-Methods'] = allow;
-          headers['Access-Control-Allow-Headers'] = 'Content-Type';
+          headers['Access-Control-Allow-Headers'] = 'Content-Type, Idempotency-Key';
           headers['Access-Control-Max-Age'] = '600';
         }
         res.writeHead(204, headers).end();
@@ -207,20 +242,27 @@ export function createApp(options: AppOptions) {
       }
       const handler = match.route.methods[method];
       if (!handler) throw new HttpError(405, `method_not_allowed: ${method} ${path}`, { Allow: allow });
+      if (method !== 'GET' && method !== 'HEAD' && origin !== undefined && !isAllowedOrigin(origin)) {
+        throw new HttpError(403, `forbidden_origin: origin not allowed for ${method}`);
+      }
       const { status, body } = await handler(req, match.params);
       send(res, status, body, cors);
     } catch (err) {
-      const { status, message, headers } = toHttpError(err);
-      if (status >= 500) console.error(err);
-      send(res, status, { error: message }, { ...cors, ...headers });
-      if (status === 413) req.resume();
+      const mapped = toHttpError(err);
+      if (mapped.status >= 500) console.error(err);
+      send(res, mapped.status, { error: mapped.error, message: mapped.message }, { ...cors, ...mapped.headers });
+      if (mapped.status === 413 || mapped.status === 403) req.resume();
     }
   }
 
   const listener = (req: IncomingMessage, res: ServerResponse) => {
     handle(req, res).catch((err) => {
       console.error(err);
-      if (!res.headersSent) res.writeHead(500).end();
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      send(res, 500, { error: 'internal_error', message: 'unexpected server error' }, {});
     });
   };
 
@@ -237,6 +279,46 @@ export function createServer(options: AppOptions): Server {
   return createHttpServer(createApp(options).listener);
 }
 
+/**
+ * UTC day core accounts a spend to when it is approved at `at`.
+ * `accountingDay` reads the approved decision time, else `recordedAt`, else `createdAt`.
+ */
+function accountingDayForClock(at: Date): string {
+  const iso = at.toISOString();
+  return accountingDay({
+    intent: {
+      id: 'clock',
+      agentId: 'clock',
+      payee: 'clock',
+      amount: 1,
+      currency: 'USD',
+      purpose: 'clock',
+      createdAt: iso,
+    },
+    decisions: [{ status: 'approved', reason: 'within_policy: clock', at: iso }],
+    recordedAt: iso,
+    updatedAt: iso,
+  });
+}
+
+/** 400 invalid_amount when `amount` has more fraction digits than the currency. Unknown currencies are left to core. */
+function rejectExcessAmountDecimals(amount: number, currency: string): void {
+  const decimals = currencyDecimals(currency);
+  if (decimals === undefined) return;
+  if (toMinorUnits(amount, decimals) !== undefined) return;
+  throw new ValidationError(
+    'invalid_amount',
+    `${currency.toUpperCase()} allows at most ${decimals} decimal places, got ${amount}`,
+  );
+}
+
+/** True when createdAt was omitted and the id comes from the body or Idempotency-Key. */
+function shouldReuseStoredCreatedAt(body: unknown, idempotencyKey: string | undefined): boolean {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return false;
+  const o = body as Record<string, unknown>;
+  return o.createdAt === undefined && (idempotencyKey !== undefined || o.id !== undefined);
+}
+
 function decodeParam(raw: string): string {
   try {
     return decodeURIComponent(raw);
@@ -245,11 +327,51 @@ function decodeParam(raw: string): string {
   }
 }
 
-function toHttpError(err: unknown): { status: number; message: string; headers: Record<string, string> } {
-  if (err instanceof HttpError) return { status: err.status, message: err.message, headers: err.headers };
-  if (err instanceof ValidationError) return { status: 400, message: err.message, headers: {} };
-  if (err instanceof PaymentError) return { status: PAYMENT_ERROR_STATUS[err.code] ?? 409, message: err.message, headers: {} };
-  return { status: 500, message: 'internal_error: unexpected server error', headers: {} };
+function toHttpError(err: unknown): { status: number; error: string; message: string; headers: Record<string, string> } {
+  if (err instanceof HttpError) return { status: err.status, ...splitCodedMessage(err.message), headers: err.headers };
+  if (err instanceof ValidationError) return { status: 400, ...codedDetail(err.code, err.message), headers: {} };
+  if (err instanceof PaymentError) {
+    return { status: PAYMENT_ERROR_STATUS[err.code] ?? 409, ...codedDetail(err.code, err.message), headers: {} };
+  }
+  if (err instanceof LedgerError) {
+    const headers: Record<string, string> = {};
+    let { message } = codedDetail(err.code, err.message);
+    if (err.code === 'lock_timeout') {
+      headers['Retry-After'] = '1';
+      message = 'the ledger is locked by another process; retry shortly';
+    }
+    return { status: LEDGER_ERROR_STATUS[err.code] ?? 500, error: err.code, message, headers };
+  }
+  return { status: 500, error: 'internal_error', message: 'unexpected server error', headers: {} };
+}
+
+/** `code` plus the text after `"<code>: "`. An empty detail becomes the code itself. */
+function codedDetail(code: string, rawMessage: string): { error: string; message: string } {
+  const prefix = `${code}: `;
+  const detail = rawMessage.startsWith(prefix) ? rawMessage.slice(prefix.length).trim() : rawMessage.trim();
+  return { error: code, message: detail.length > 0 ? detail : code };
+}
+
+/** HttpError messages are `"<code>: <detail>"`. */
+function splitCodedMessage(raw: string): { error: string; message: string } {
+  const idx = raw.indexOf(': ');
+  if (idx > 0) {
+    const error = raw.slice(0, idx).trim();
+    if (error.length > 0 && !error.includes(':')) return codedDetail(error, raw);
+  }
+  const error = raw.trim() || 'internal_error';
+  return { error, message: error };
+}
+
+/** Entry flag, or a receipt meta flag (`true` / `"true"`). */
+function entryNeedsManualResolve(entry: LedgerEntry): boolean {
+  if (entry.needsManualResolve === true) return true;
+  const receipt = entry.receipt;
+  if (receipt === undefined || !('meta' in receipt)) return false;
+  const meta = (receipt as { meta: unknown }).meta;
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return false;
+  const flag = (meta as { needsManualResolve?: unknown }).needsManualResolve;
+  return flag === true || flag === 'true';
 }
 
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string>): void {
@@ -279,9 +401,19 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   }
   const text = Buffer.concat(chunks).toString('utf8');
   if (text.trim() === '') return undefined;
+  if (!isJsonContentType(req.headers['content-type'])) {
+    throw new HttpError(415, 'unsupported_media_type: Content-Type must be application/json');
+  }
   try {
     return JSON.parse(text);
   } catch {
     throw new HttpError(400, 'invalid_json: request body is not valid JSON');
   }
+}
+
+function isJsonContentType(header: string | string[] | undefined): boolean {
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (typeof raw !== 'string') return false;
+  const media = raw.split(';')[0]?.trim().toLowerCase() ?? '';
+  return media === 'application/json';
 }

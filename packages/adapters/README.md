@@ -56,7 +56,7 @@ If no item status, batch `batch_status` is used:
 | Token endpoint failure (any) | `failed`, `externalId: ''` |
 | `POST /payouts` **4xx** (except handled duplicate — see idempotency) | `failed`, `externalId: ''` |
 | `POST /payouts` **5xx**, any thrown error on POST (network, timeout, abort, other), or **2xx** with unparseable body / missing `payout_batch_id` | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.needsManualResolve: 'true'`, optional `meta.errorName` from PayPal error name when known |
-| Duplicate `sender_batch_id` with HATEOAS link to existing batch | `GET` batch; on success return that receipt (with `meta.duplicateSenderBatchId` / `meta.errorName` from duplicate error); on GET error/non-2xx → `pending`, `externalId: batch id`, `meta.unknownOutcome: 'true'` (no `needsManualResolve`) |
+| Duplicate `sender_batch_id` with HATEOAS link to existing batch | `GET` batch; on success return that receipt (with `meta.duplicateSenderBatchId` / `meta.errorName` from duplicate error); on GET error/non-2xx/network throw/non-JSON body → `pending`, `externalId: batch id`, `meta.unknownOutcome: 'true'` (no `needsManualResolve`; `status` can poll the batch id) |
 | Duplicate error **without** batch link | `pending`, `externalId: ''`, `meta.unknownOutcome: 'true'`, `meta.duplicateSenderBatchId: 'true'`, `meta.needsManualResolve: 'true'`, `meta.errorName` when PayPal names the error |
 | **2xx** batch body with **2+ items** (POST 201 or duplicate-path GET) | `pending`, `externalId: batch id`, `meta.needsManualResolve: 'true'`, `meta.errorName: 'receipt_mismatch'`, `meta.itemCount`, `meta.batchStatus` (+ first-item fields when present). Does **not** throw — failing pay would free the daily limit and risk double-pay. |
 
@@ -79,7 +79,7 @@ String keys only (never secrets):
 | `payoutItemId` | First item `payout_item_id` when present |
 | `transactionStatus` | First item `transaction_status` when present |
 | `unknownOutcome` | `'true'` when pay ended pending due to uncertain outcome (5xx, POST fetch throw, bad 2xx body, duplicate without resolvable batch, or duplicate GET failure with batch id) |
-| `needsManualResolve` | `'true'` when outcome is uncertain and operator must settle (planned `POST /intents/:id/resolve`): empty `externalId` after unknown pay, or multi-item batch on pay with batch id |
+| `needsManualResolve` | `'true'` when outcome is uncertain and operator must settle (planned `POST /intents/:id/resolve`): pay() with `unknownOutcome` and empty `externalId`, or multi-item batch on pay with batch id |
 | `errorName` | PayPal error `name` when known (`PayPalApiError` with a specific name, or duplicate-guess from parsed 4xx body); `'receipt_mismatch'` when batch has 2+ items; omitted for non-PayPal errors (e.g. network `TypeError`) |
 | `itemCount` | String count of batch `items[]` when `errorName` is `receipt_mismatch` |
 | `duplicateSenderBatchId` | `'true'` on duplicate `sender_batch_id` errors (with or without batch link); signals idempotency collision |
@@ -167,7 +167,7 @@ Examples: `alice.testnet` is payable on testnet; `alice.near` is not. `Alice.tes
 
 ### Outcome mapping
 
-`Receipt.meta` is `{ amountYocto, receiverId, network }`. Pending receipts also set `unknownOutcome` to `'true'`. `intentId` is `intent.id` and `rail` is `'near'`.
+`Receipt.meta` is `{ amountYocto, receiverId, network }`. Pending unknown-outcome receipts set `unknownOutcome` to `'true'`; `needsManualResolve` is `'true'` only when `externalId` is empty (nothing to poll). `intentId` is `intent.id` and `rail` is `'near'`.
 
 | `sendTransfer` result | Receipt status | `externalId` |
 |-----------------------|----------------|--------------|

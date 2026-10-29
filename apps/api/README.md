@@ -11,7 +11,7 @@
 | `HOST` | `127.0.0.1` | bind address |
 | `LEDGER_PATH` | `apps/api/.data/ledger.json` (resolved from the api package, gitignored) | single writer process per file |
 | `RAIL` | `mock` | `mock` \| `paypal` (PayPal Payouts v1, sandbox) \| `near` (NEAR testnet native transfer). Missing credentials for a wired rail → exits 1 at startup with `adapter_config: …` plus `missing required env vars for RAIL=<rail>: <names>` (names only, no values, no stack trace) |
-| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit) |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?`, `PAYPAL_TIMEOUT_MS?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit). `PAYPAL_TIMEOUT_MS` — positive integer HTTP timeout in ms (default `30000`) |
 | `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK?`, `NEAR_RPC_URL?` | | only for `RAIL=near`; `NEAR_RPC_URL` defaults to `https://test.rpc.fastnear.com` on testnet |
 | `DEMO_PAYEES` | | optional for `RAIL=paypal` or `near` only: comma-separated `name=address` pairs (whitespace trimmed). When non-empty, **replaces** the default logical→address map entirely. Invalid syntax or payee for the rail → startup error `demo_payees: … (RAIL=…)`. Ignored for `mock`. |
 
@@ -34,37 +34,41 @@ At startup, `railSeed(RAIL, process.env)` selects policy limits, currency, amoun
 `policy.allowedPayees` is the de-duplicated list of rail addresses (insertion order). The agent reads `GET /rail` to map planner logical payees and scale USD quote amounts (e.g. scenario `small` 10 USD → 0.1 NEAR when `amountScale` is 0.01).
 
 ## Policy
+Seed scripts and tooling can import `DEFAULT_POLICY` from `apps/api/src/policy-defaults.ts` (side-effect free; no server or ledger I/O).
+
 Kept **in memory** (one policy, one agent), seeded from `railSeed` (mock uses exported `DEFAULT_POLICY` unchanged):
-`PUT /policy` replaces it until restart. The ledger is on disk; the policy is not.
+`PUT /policy` replaces it until restart. After the JSON shape check, the next policy is passed to core `policyProblem` with `{ dailyTotal: 0 }`. A problem is `400 {"error":"invalid_policy","message":"<problem>"}` and the active policy is left unchanged. The ledger is on disk; the policy is not.
 
 ## Endpoints
-All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
+All bodies are JSON. Errors are `{"error": "<code>", "message": "<detail>"}`.
 
 | method & path | request | response |
 |---|---|---|
 | `GET /health` | | `200 {ok: true, rail}` |
 | `GET /rail` | | `200 {rail, currency, amountScale, payees}` — demo mapping for agents (defaults: policy currency, scale 1, `{}`) |
-| `POST /intents` | `{agentId, payee, amount, currency, purpose, id?, createdAt?}` | `201` (new) / `200` (replay) `PaymentResult & {intent}` = `{intentId, status: paid\|rejected\|needs_approval\|failed, decision, receipt?, error?, replayed?, intent}` |
+| `POST /intents` | `{agentId, payee, amount, currency, purpose, id?, createdAt?}`; optional `Idempotency-Key` header | `201` (new) / `200` (replay) `PaymentResult & {intent}` = `{intentId, status: paid\|rejected\|needs_approval\|failed, decision, receipt?, error?, replayed?, intent}` |
 | `POST /intents/:id/approve` | optional `{approver?}` | `200 PaymentResult` (`paid`, or `rejected` if the re-check fails) |
 | `POST /intents/:id/reject` | optional `{approver?, note?}` | `200 PaymentResult` (`rejected`, reason `rejected_by_human: …`) |
 | `POST /intents/:id/refresh` | optional empty body | `200 PaymentResult & {changed: boolean}` — polls the adapter's `status()` for a **pending** receipt on this rail; settles the ledger when the rail reports `succeeded` or `failed`. Still `pending` → `changed: false`, no ledger write. |
 | `POST /intents/:id/resolve` | `{status: succeeded\|failed\|refunded, note, resolvedBy, externalId?}` | `200 PaymentResult & {changed: true, resolution}` — operator settles a **pending** receipt by hand; never calls the adapter (see below) |
-| `GET /ledger` | | `200 {entries: LedgerEntry[], today: {day: "YYYY-MM-DD" (UTC), totals: {[agentId]: number}}}` |
+| `GET /ledger` | | `200 {entries: LedgerEntry[], today: {day: "YYYY-MM-DD", totals: {[agentId]: {[currency]: number}}}}` |
 | `GET /policy` | | `200 Policy` |
-| `PUT /policy` | full `Policy` | `200 Policy` |
+| `PUT /policy` | full `Policy` | `200 Policy`, or `400 invalid_policy` (active policy unchanged) |
 
 **Client-supplied intent fields:** `agentId`, `payee`, `amount` (finite number > 0), `currency`, `purpose` are
-required. `id` (1–128 chars of `[A-Za-z0-9._:-]`) and `createdAt` (ISO 8601 with a zone) are optional; the server
-fills in `pi_<uuid>` and the current time. Unknown fields are rejected. For an idempotent retry, send the same `id`
-**and** `createdAt`: the core replay needs a deep-equal intent, otherwise the retry is a `409 intent_conflict`.
+required. If `currencyDecimals(currency)` is defined and `amount` has more decimal places than that (`toMinorUnits` is undefined), the response is `400 {"error":"invalid_amount","message":…}` before any ledger write or `pay()`. Unknown currencies are not rejected here; core evaluates them. `id` (1–128 chars of `[A-Za-z0-9._:-]`) and `createdAt` (ISO 8601 with a zone) are optional; the server
+fills in `pi_<uuid>` and the current time. Unknown fields are rejected. Core replay needs a deep-equal intent, so a
+different body for the same id is `409 intent_conflict`. Optional header `Idempotency-Key` uses the same charset as
+`id` (invalid → `400 invalid_header`). When the body omits `id`, that key is the intent id; when both are set they
+must match (`400 invalid_body` if they differ). If `createdAt` is omitted and that id is already stored, the server
+reuses the stored `createdAt` so the retry replays.
 
 **`GET /ledger` entries** are core `LedgerEntry` objects as stored, including `decisions`: every decision, oldest
 first, as `{status, reason, at, actor?}` (`actor` is `policy` or the approver). `decision` is still the latest one.
 
-**Today's totals** use the same rule as core: UTC day of `intent.createdAt`, entries that count toward the daily
-total (approved and not failed).
+**Today's totals:** `today.day` is the accounting day of the injected clock (the UTC day core's `accountingDay` assigns to an approval at that instant). `today.totals` is keyed by `agentId` for agents present in the ledger; each value is `Ledger.dailyTotals(agentId, day)` (upper-case currency → amount). There is no currency scalar and no `totalsByCurrency` field. Buckets follow core (approval time, not `intent.createdAt`).
 
-**Refresh contract:** `404 intent_not_found`; `409 no_receipt` (no receipt on the entry, e.g. rejected); `409 receipt_not_pending` when the receipt is already settled (`succeeded` / `failed` / `refunded`) — **409 instead of 200 `changed: false`** so clients know the intent is final and can read `GET /ledger`; `409 status_unsupported` when the adapter has no `status()` or the receipt rail differs; `502 status_check_failed` when `status()` throws or returns an invalid receipt (nothing stored).
+**Refresh contract:** `404 intent_not_found`; `409 no_receipt` (no receipt on the entry, e.g. rejected); `409 receipt_not_pending` when the receipt is already settled (`succeeded` / `failed` / `refunded`) — **409 instead of 200 `changed: false`** so clients know the intent is final and can read `GET /ledger`; `409 status_unsupported` when the adapter has no `status()` or the receipt rail differs. An entry flagged `needsManualResolve` (or a pending receipt whose `meta.needsManualResolve` is `true` / `"true"` when refresh already refuses with `status_unsupported`) is also `409 status_unsupported`, and `message` tells the caller to use `POST /intents/<id>/resolve` with that intent id. `502 status_check_failed` when `status()` throws or returns an invalid receipt (nothing stored).
 
 **Resolve contract (operator, `POST /intents/:id/resolve`):** for pending receipts that `status()` cannot settle, e.g. PayPal
 receipts with `meta.needsManualResolve: "true"` (duplicate `sender_batch_id` guesses, 5xx / network errors with no batch id,
@@ -83,15 +87,31 @@ batches with 2+ items). The route never calls the adapter (`pay()` or `status()`
   (already settled, including a second resolve).
 - No auth: like the rest of this demo API it is meant for localhost only; `resolvedBy` is self-reported.
 
-**Status codes:** `400` `invalid_body` / `invalid_json` / `invalid_path`; `404` `not_found` (route) or
-`intent_not_found`; `405` `method_not_allowed` (with `Allow`); `409` `already_paid`, `not_pending`, `in_progress`,
-`intent_conflict`, `no_receipt`, `receipt_not_pending`, `status_unsupported`; `502` `status_check_failed`; `413` `payload_too_large` (body cap 64 KiB); `500` `internal_error`. Policy rejections are not
-HTTP errors: they come back as `status: "rejected"` results.
+**Error body:** every error response is JSON `{"error":"<code>","message":"<detail>"}` with `Content-Type: application/json`. `error` is a bare machine code (no `:`). `message` is the detail after `"<code>: "` on `ValidationError`, `HttpError`, `PaymentError`, and `LedgerError` (if there is no detail, `message` is the code). Unknown errors are `500` `{"error":"internal_error","message":"unexpected server error"}` and do not include the thrown message. If the last-resort handler finds headers already sent, it ends the response without a second body.
+
+| Status | `error` codes |
+| --- | --- |
+| 400 | `invalid_body`, `invalid_json`, `invalid_path`, `invalid_header`, `invalid_input`, `invalid_amount`, `invalid_policy` |
+| 403 | `forbidden_origin` |
+| 404 | `not_found` (route or ledger), `intent_not_found` |
+| 405 | `method_not_allowed` (`Allow` header) |
+| 409 | `already_paid`, `not_pending`, `in_progress`, `intent_conflict`, `no_receipt`, `receipt_not_pending`, `status_unsupported`, `precondition_failed`, `duplicate_intent` |
+| 413 | `payload_too_large` (body cap 64 KiB) |
+| 415 | `unsupported_media_type` (non-empty body whose `Content-Type` is not `application/json`, including a missing type) |
+| 500 | `internal_error` |
+| 502 | `status_check_failed` |
+| 503 | `lock_timeout` (`Retry-After: 1`, message says to retry), `ledger_corrupt`, `ledger_missing` |
+
+Policy rejections are not HTTP errors: they come back as `status: "rejected"` results.
 
 **CORS:** only `http://localhost:<port>` and `http://127.0.0.1:<port>` origins are echoed in
 `Access-Control-Allow-Origin` (with `Vary: Origin`). `OPTIONS` answers `204` with `Allow`; for an allowed origin it
-adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type` and `Max-Age: 600`. Other origins
+adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type, Idempotency-Key`, `Access-Control-Expose-Headers: Date`, and `Max-Age: 600`. Other origins
 get no CORS headers.
+
+**Origin (CSRF):** for methods other than `GET`, `HEAD`, and `OPTIONS`, if the request sends an `Origin` header that
+is not allowed, the server responds `403` `{"error":"forbidden_origin","message":…}` before the route handler runs or the body is read;
+requests with no `Origin` are unchanged.
 
 ## Adapter registry
 `apps/api/src/adapters.ts`:

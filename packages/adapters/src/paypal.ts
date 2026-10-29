@@ -214,6 +214,21 @@ function buildPendingUnknownMeta(
   return meta;
 }
 
+function buildPendingUnknownBatchMeta(
+  error: unknown,
+  extraMeta?: Record<string, string>,
+): Record<string, string> {
+  const meta: Record<string, string> = {
+    unknownOutcome: 'true',
+    ...extraMeta,
+  };
+  const fromError = paypalErrorNameForMeta(error);
+  if (fromError !== undefined && meta.errorName === undefined) {
+    meta.errorName = fromError;
+  }
+  return meta;
+}
+
 function extractBatchIdFromDuplicateError(
   parsed: PayPalNamedErrorBody | null,
   bodyText: string,
@@ -240,37 +255,36 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
     extraMeta?: Record<string, string>,
   ): Promise<AdapterReceipt> {
     const at = new Date(nowMs()).toISOString();
-    const unknownMeta = (more?: Record<string, string>): Record<string, string> => ({
-      unknownOutcome: 'true',
-      ...extraMeta,
-      ...more,
+    const pendingUnknownBatch = (
+      error: unknown,
+      more?: Record<string, string>,
+    ): AdapterReceipt => ({
+      intentId,
+      rail: 'paypal',
+      externalId: batchId,
+      status: 'pending',
+      at,
+      meta: buildPendingUnknownBatchMeta(error, { ...extraMeta, ...more }),
     });
     let response: Response;
     try {
       response = await apiCall(`/v1/payments/payouts/${batchId}`, { method: 'GET' });
     } catch (error) {
       onError?.(error, { intentId, op: 'payout' });
-      return {
-        intentId,
-        rail: 'paypal',
-        externalId: batchId,
-        status: 'pending',
-        at,
-        meta: unknownMeta(),
-      };
+      return pendingUnknownBatch(error);
     }
     if (!response.ok) {
-      onError?.(await parsePayPalError(response), { intentId, op: 'payout' });
-      return {
-        intentId,
-        rail: 'paypal',
-        externalId: batchId,
-        status: 'pending',
-        at,
-        meta: unknownMeta(),
-      };
+      const err = await parsePayPalError(response);
+      onError?.(err, { intentId, op: 'payout' });
+      return pendingUnknownBatch(err);
     }
-    const body = (await response.json()) as PayoutBatchResponse;
+    let body: PayoutBatchResponse;
+    try {
+      body = (await response.json()) as PayoutBatchResponse;
+    } catch (error) {
+      onError?.(error, { intentId, op: 'payout' });
+      return pendingUnknownBatch(error);
+    }
     const itemCount = payoutBatchItemCount(body);
     if (itemCount >= 2) {
       const payoutBatchId = body.batch_header?.payout_batch_id ?? batchId;

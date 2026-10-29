@@ -51,10 +51,11 @@ export function createNearAdapter(opts: NearAdapterOptions): StatusCapableAdapte
           return receipt(intent.id, 'failed', result.txHash ?? '', meta, now());
         }
         onError?.(result.error, { intentId: intent.id, op: 'send' });
-        return receipt(intent.id, 'pending', result.txHash ?? '', { ...meta, unknownOutcome: 'true' }, now());
+        const txHash = result.txHash ?? '';
+        return receipt(intent.id, 'pending', txHash, pendingUnknownMeta(meta, txHash), now());
       } catch (error) {
         onError?.(error, { intentId: intent.id, op: 'send' });
-        return receipt(intent.id, 'pending', '', { ...meta, unknownOutcome: 'true' }, now());
+        return receipt(intent.id, 'pending', '', pendingUnknownMeta(meta, ''), now());
       }
     },
 
@@ -95,6 +96,14 @@ export function createNearAdapter(opts: NearAdapterOptions): StatusCapableAdapte
       return updated;
     },
   };
+}
+
+function pendingUnknownMeta(base: Record<string, string>, externalId: string): Record<string, string> {
+  const meta: Record<string, string> = { ...base, unknownOutcome: 'true' };
+  if (externalId === '') {
+    meta.needsManualResolve = 'true';
+  }
+  return meta;
 }
 
 function receipt(

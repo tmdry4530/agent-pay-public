@@ -97,10 +97,10 @@ test('pending receipt settles to paid with await_receipt and refresh steps', asy
   assert.equal(refresh?.type === 'step' && refresh.to, 'succeeded');
   const ledger = (await (await fetch(`${base}/ledger`)).json()) as {
     entries: { receipt?: { status: string }; paymentStatus?: string }[];
-    today: { totals: Record<string, number> };
+    today: { totals: Record<string, Record<string, number>> };
   };
   assert.equal(ledger.entries[0]?.receipt?.status, 'succeeded');
-  assert.equal(ledger.today.totals['demo-agent'], 10);
+  assert.deepEqual(ledger.today.totals['demo-agent'], { USD: 10 });
 });
 
 test('needs-approval + auto-approve with a pending receipt: refresh after approve, paid exit 0', async (t) => {
@@ -153,8 +153,10 @@ test('pending receipt fails on rail: exit 1 and daily total excludes amount', as
   );
   assert.equal(result.status, 'failed');
   assert.equal(result.exitCode, 1);
-  const ledger = (await (await fetch(`${base}/ledger`)).json()) as { today: { totals: Record<string, number> } };
-  assert.equal(ledger.today.totals['demo-agent'], undefined);
+  const ledger = (await (await fetch(`${base}/ledger`)).json()) as {
+    today: { totals: Record<string, Record<string, number>> };
+  };
+  assert.deepEqual(ledger.today.totals['demo-agent'], {});
 });
 
 test('receipt still pending at timeout: receipt_pending exit 3', async (t) => {

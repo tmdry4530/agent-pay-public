@@ -51,6 +51,26 @@ export function missingRequiredEnv(rail: Rail, env: AdapterContext['env']): stri
   return (RAIL_REQUIRED_ENV[rail] ?? []).filter((name) => (env[name] ?? '').trim() === '');
 }
 
+const DEFAULT_PAYPAL_TIMEOUT_MS = 30_000;
+
+/** Positive integer HTTP timeout for PayPal adapter requests; default 30s when unset or blank. */
+export function paypalTimeoutMsFromEnv(env: Readonly<Record<string, string | undefined>>): number {
+  const raw = (env.PAYPAL_TIMEOUT_MS ?? '').trim();
+  if (raw === '') return DEFAULT_PAYPAL_TIMEOUT_MS;
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(
+      `adapter_config: PAYPAL_TIMEOUT_MS must be a positive integer (milliseconds), got ${JSON.stringify(env.PAYPAL_TIMEOUT_MS)}`,
+    );
+  }
+  const ms = Number(raw);
+  if (ms <= 0) {
+    throw new Error(
+      `adapter_config: PAYPAL_TIMEOUT_MS must be a positive integer (milliseconds), got ${JSON.stringify(env.PAYPAL_TIMEOUT_MS)}`,
+    );
+  }
+  return ms;
+}
+
 /** Mock rail: every payment succeeds immediately. For demos and tests only. */
 export function createMockAdapter(ctx: Pick<AdapterContext, 'now'> = { now: () => new Date() }): PaymentAdapter {
   return {
@@ -73,7 +93,7 @@ export function createMockAdapter(ctx: Pick<AdapterContext, 'now'> = { now: () =
 /**
  * PayPal Payouts adapter (packages/adapters `createPayPalAdapter`). Payee must be
  * an email address. Credentials from PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, and
- * optional PAYPAL_BASE_URL; missing required vars fail at factory time. No network
+ * optional PAYPAL_BASE_URL and PAYPAL_TIMEOUT_MS; missing required vars fail at factory time. No network
  * until the first pay().
  */
 export const paypalFactory: AdapterFactory = (ctx) => {
@@ -85,7 +105,17 @@ export const paypalFactory: AdapterFactory = (ctx) => {
       missing: missingRequiredEnv('paypal', ctx.env),
     });
   }
-  return createPayPalAdapter(config);
+  try {
+    return createPayPalAdapter({
+      ...config,
+      timeoutMs: paypalTimeoutMsFromEnv(ctx.env),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new AdapterConfigError(msg.startsWith('adapter_config:') ? `${msg} (RAIL=paypal)` : `adapter_config: ${msg} (RAIL=paypal)`, {
+      missing: missingRequiredEnv('paypal', ctx.env),
+    });
+  }
 };
 
 export const nearFactory: AdapterFactory = (ctx) => {

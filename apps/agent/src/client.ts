@@ -16,7 +16,7 @@ export type IntentPaymentResponse = PaymentResult & { intent: { id: string; crea
 
 export interface LedgerResponse {
   entries: LedgerEntry[];
-  today: { day: string; totals: Record<string, number> };
+  today: { day: string; totals: Record<string, Record<string, number>> };
 }
 
 export class ApiClientError extends Error {
@@ -66,15 +66,19 @@ async function readJson(res: Response): Promise<unknown> {
   }
 }
 
+function apiErrorMessage(body: unknown, status: number): string {
+  if (body !== null && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string') {
+    const error = (body as { error: string }).error;
+    const message = 'message' in body ? (body as { message: unknown }).message : undefined;
+    if (typeof message === 'string' && message.length > 0) return `${error}: ${message}`;
+    return error;
+  }
+  return `HTTP ${status}`;
+}
+
 async function assertOk(res: Response): Promise<unknown> {
   const body = await readJson(res);
-  if (!res.ok) {
-    const err =
-      body !== null && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string'
-        ? (body as { error: string }).error
-        : `HTTP ${res.status}`;
-    throw new ApiClientError(err, res.status);
-  }
+  if (!res.ok) throw new ApiClientError(apiErrorMessage(body, res.status), res.status);
   return body;
 }
 
