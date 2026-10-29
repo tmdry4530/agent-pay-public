@@ -67,9 +67,18 @@ async function startServer(
   return base;
 }
 
-async function readError(res: Response): Promise<string> {
-  const body = (await res.json()) as { error?: string };
-  return body.error ?? '';
+async function readError(res: Response): Promise<{ error: string; message: string }> {
+  const body: unknown = await res.json();
+  assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body));
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ['error', 'message']);
+  assert.equal(typeof record.error, 'string');
+  assert.equal(typeof record.message, 'string');
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0 && !error.includes(':'));
+  assert.ok(message.length > 0);
+  return { error, message };
 }
 
 type LedgerBody = {
@@ -187,7 +196,7 @@ test('resolve happy paths and adapter isolation', async (t) => {
     body: JSON.stringify({ status: 'failed', note: 'too late', resolvedBy: 'ops' }),
   });
   assert.equal(again.status, 409);
-  assert.match(await readError(again), /^receipt_not_pending: /);
+  assert.equal((await readError(again)).error, 'receipt_not_pending');
   assert.equal(counts.payCalls, baselinePay + 2);
   assert.equal(counts.statusCalls, 0);
 });
@@ -202,7 +211,7 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
     body: JSON.stringify({ status: 'succeeded', note: 'x', resolvedBy: 'ops' }),
   });
   assert.equal(missing.status, 404);
-  assert.match(await readError(missing), /^intent_not_found: /);
+  assert.equal((await readError(missing)).error, 'intent_not_found');
   assert.equal(counts.statusCalls, 0);
 
   await fetch(`${base}/intents`, {
@@ -216,7 +225,7 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
     body: JSON.stringify({ status: 'succeeded', note: 'x', resolvedBy: 'ops' }),
   });
   assert.equal(noReceipt.status, 409);
-  assert.match(await readError(noReceipt), /^no_receipt: /);
+  assert.equal((await readError(noReceipt)).error, 'no_receipt');
 
   const succeededAdapter: PaymentAdapter = {
     rail: 'mock',
@@ -242,7 +251,7 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
     body: JSON.stringify({ status: 'succeeded', note: 'x', resolvedBy: 'ops' }),
   });
   assert.equal(settled.status, 409);
-  assert.match(await readError(settled), /^receipt_not_pending: /);
+  assert.equal((await readError(settled)).error, 'receipt_not_pending');
 
   await fetch(`${base}/intents`, {
     method: 'POST',
@@ -304,7 +313,7 @@ test('resolve errors: 404, no_receipt, already succeeded, validation', async (t)
   for (const init of badCases) {
     const res = await fetch(`${base}/intents/pi_validation/resolve`, init);
     assert.equal(res.status, 400);
-    assert.match(await readError(res), /^invalid_body: /);
+    assert.equal((await readError(res)).error, 'invalid_body');
     assert.equal(counts.payCalls, baselinePay);
     assert.equal(counts.statusCalls, 0);
     const ledgerNow = (await (await fetch(`${base}/ledger`)).json()) as LedgerBody;

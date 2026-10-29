@@ -85,5 +85,5 @@ test('L1: listener last-resort 500 is JSON internal_error', async (t) => {
   assert.equal(statusCode, 500);
   const ct = String(headersOut['Content-Type'] ?? headersOut['content-type'] ?? '');
   assert.match(ct, /application\/json/i);
-  assert.deepEqual(JSON.parse(bodyOut), { error: 'internal_error: unexpected server error' });
+  assert.deepEqual(JSON.parse(bodyOut), { error: 'internal_error', message: 'unexpected server error' });
 });

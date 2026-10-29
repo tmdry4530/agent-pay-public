@@ -111,18 +111,27 @@ async function startTestServer(
   return { base, ledger };
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ error: string; message: string }> {
   assert.equal(res.headers.get('content-type')?.includes('application/json'), true);
-  const body = (await res.json()) as { error?: string };
-  assert.equal(typeof body.error, 'string');
-  return body.error!;
+  const body: unknown = await res.json();
+  assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body));
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ['error', 'message']);
+  assert.equal(typeof record.error, 'string');
+  assert.equal(typeof record.message, 'string');
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0 && !error.includes(':'));
+  assert.ok(message.length > 0);
+  return { error, message };
 }
 
-function assertConflictError(err: string): void {
+function assertConflictError(err: { error: string; message: string }): void {
   assert.ok(
-    err.startsWith('not_pending:') || err.startsWith('already_paid:'),
-    `expected not_pending or already_paid, got ${JSON.stringify(err)}`,
+    err.error === 'not_pending' || err.error === 'already_paid',
+    `expected not_pending or already_paid, got ${JSON.stringify(err.error)}`,
   );
+  assert.ok(err.message.length > 0);
 }
 
 async function seedNeedsApproval(base: string, id: string): Promise<void> {

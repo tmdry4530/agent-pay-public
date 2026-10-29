@@ -57,11 +57,19 @@ async function startTestServer(
   return { base, now };
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ error: string; message: string }> {
   assert.equal(res.headers.get('content-type')?.includes('application/json'), true);
-  const body = (await res.json()) as { error?: string };
-  assert.equal(typeof body.error, 'string');
-  return body.error!;
+  const body: unknown = await res.json();
+  assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body));
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ['error', 'message']);
+  assert.equal(typeof record.error, 'string');
+  assert.equal(typeof record.message, 'string');
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0 && !error.includes(':'));
+  assert.ok(message.length > 0);
+  return { error, message };
 }
 
 async function ledgerEntryCount(base: string): Promise<number> {
@@ -88,7 +96,7 @@ test('H1: POST /intents with disallowed Origin (text/plain) returns 403 and does
   });
 
   assert.equal(res.status, 403);
-  assert.match(await readError(res), /^forbidden_origin:/);
+  assert.equal((await readError(res)).error, 'forbidden_origin');
   assert.equal(await ledgerEntryCount(base), before);
   assert.equal(counts.payCalls, 0);
 });
@@ -110,7 +118,7 @@ test('H1: POST /intents/:id/approve with disallowed Origin returns 403 and inten
     headers: { Origin: EVIL_ORIGIN },
   });
   assert.equal(approveRes.status, 403);
-  assert.match(await readError(approveRes), /^forbidden_origin:/);
+  assert.equal((await readError(approveRes)).error, 'forbidden_origin');
 
   const getRes = await fetch(`${base}/ledger`);
   assert.equal(getRes.status, 200);
@@ -138,7 +146,7 @@ test('H1: POST /intents/:id/resolve and /reject with disallowed Origin return 40
     body: JSON.stringify({ status: 'failed', note: 'n', resolvedBy: 'ops' }),
   });
   assert.equal(resolveRes.status, 403);
-  assert.match(await readError(resolveRes), /^forbidden_origin:/);
+  assert.equal((await readError(resolveRes)).error, 'forbidden_origin');
 
   await fetch(`${base}/intents`, {
     method: 'POST',
@@ -152,7 +160,7 @@ test('H1: POST /intents/:id/resolve and /reject with disallowed Origin return 40
     body: JSON.stringify({ approver: 'bob', note: 'nope' }),
   });
   assert.equal(rejectRes.status, 403);
-  assert.match(await readError(rejectRes), /^forbidden_origin:/);
+  assert.equal((await readError(rejectRes)).error, 'forbidden_origin');
 });
 
 test('H1: Origin "null" string on POST returns 403', async (t) => {
@@ -168,7 +176,7 @@ test('H1: Origin "null" string on POST returns 403', async (t) => {
   });
 
   assert.equal(res.status, 403);
-  assert.match(await readError(res), /^forbidden_origin:/);
+  assert.equal((await readError(res)).error, 'forbidden_origin');
 });
 
 test('H1: POST /intents with allowed Origin or no Origin still returns 201', async (t) => {

@@ -64,9 +64,18 @@ async function startServer(
   return base;
 }
 
-async function readError(res: Response): Promise<string> {
-  const body = (await res.json()) as { error?: string };
-  return body.error ?? '';
+async function readError(res: Response): Promise<{ error: string; message: string }> {
+  const body: unknown = await res.json();
+  assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body));
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ['error', 'message']);
+  assert.equal(typeof record.error, 'string');
+  assert.equal(typeof record.message, 'string');
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0 && !error.includes(':'));
+  assert.ok(message.length > 0);
+  return { error, message };
 }
 
 test('refresh pending -> pending then succeeded', async (t) => {
@@ -147,7 +156,7 @@ test('refresh errors: 404, 409 no_receipt, 409 settled, 409 unsupported, 502', a
   });
   const noReceipt = await fetch(`${basePlain}/intents/pi_rej/refresh`, { method: 'POST' });
   assert.equal(noReceipt.status, 409);
-  assert.match(await readError(noReceipt), /^no_receipt:/);
+  assert.equal((await readError(noReceipt)).error, 'no_receipt');
 
   const baseSettle = await startServer(
     t,
@@ -161,7 +170,7 @@ test('refresh errors: 404, 409 no_receipt, 409 settled, 409 unsupported, 502', a
   await fetch(`${baseSettle}/intents/pi_done/refresh`, { method: 'POST' });
   const settled = await fetch(`${baseSettle}/intents/pi_done/refresh`, { method: 'POST' });
   assert.equal(settled.status, 409);
-  assert.match(await readError(settled), /^receipt_not_pending:/);
+  assert.equal((await readError(settled)).error, 'receipt_not_pending');
 
   await fetch(`${basePlain}/intents`, {
     method: 'POST',
@@ -170,7 +179,7 @@ test('refresh errors: 404, 409 no_receipt, 409 settled, 409 unsupported, 502', a
   });
   const unsupported = await fetch(`${basePlain}/intents/pi_unsup/refresh`, { method: 'POST' });
   assert.equal(unsupported.status, 409);
-  assert.match(await readError(unsupported), /^status_unsupported:/);
+  assert.equal((await readError(unsupported)).error, 'status_unsupported');
 
   const baseThrow = await startServer(t, createPendingStatusAdapter({ throwOnStatus: true }));
   await fetch(`${baseThrow}/intents`, {
@@ -180,7 +189,7 @@ test('refresh errors: 404, 409 no_receipt, 409 settled, 409 unsupported, 502', a
   });
   const boom = await fetch(`${baseThrow}/intents/pi_boom/refresh`, { method: 'POST' });
   assert.equal(boom.status, 502);
-  assert.match(await readError(boom), /^status_check_failed:/);
+  assert.equal((await readError(boom)).error, 'status_check_failed');
 
   const baseMismatch = await startServer(
     t,
@@ -193,7 +202,9 @@ test('refresh errors: 404, 409 no_receipt, 409 settled, 409 unsupported, 502', a
   });
   const mismatch = await fetch(`${baseMismatch}/intents/pi_mismatch/refresh`, { method: 'POST' });
   assert.equal(mismatch.status, 502);
-  assert.match(await readError(mismatch), /^status_check_failed: receipt_mismatch:/);
+  const mismatchErr = await readError(mismatch);
+  assert.equal(mismatchErr.error, 'status_check_failed');
+  assert.match(mismatchErr.message, /^receipt_mismatch:/);
   const after = (await (await fetch(`${baseMismatch}/ledger`)).json()) as { entries: { receipt?: { status: string; rail: string } }[] };
   assert.deepEqual(after.entries[0]?.receipt && [after.entries[0].receipt.status, after.entries[0].receipt.rail], ['pending', 'mock']);
 });

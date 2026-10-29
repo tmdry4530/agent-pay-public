@@ -20,11 +20,14 @@ import {
 import { DEFAULT_POLICY, createApp, createMockAdapter, createServer, loadConfig } from '../src/index.ts';
 
 /**
- * New error body: {"error":"<code>","message":"<human detail>"}.
- * `error` is the bare machine code (no ": detail" suffix). `message` is non-empty.
- * app.ts today still sends {"error":"<code>: <detail>"} for several of these, so
- * most cases fail until that mapping lands. Unknown routes keep code `not_found`
- * (HttpError 404, `not_found: no route for …`).
+ * New error body is exactly {"error":"<bare code>","message":"<detail>"} — those
+ * two keys only. `error` is a non-empty machine code with no ":". `message` is a
+ * non-empty detail. app.ts today still sends {"error":"<code>: <detail>"} for
+ * several of these, so most cases fail until that mapping lands. Unknown routes
+ * keep code `not_found` (HttpError 404, detail `no route for …`).
+ *
+ * GET /ledger `today.totals` is keyed by agentId. Each value is the per-currency
+ * object from Ledger.dailyTotals (no totalsByCurrency, no currency scalar).
  */
 
 const FIXED_NOW = new Date('2026-10-28T12:00:00.000Z');
@@ -131,21 +134,32 @@ async function startTestServer(t: { after: (fn: () => Promise<void>) => void }, 
   return { base };
 }
 
-function isApiErrorBody(body: unknown): body is { error: string; message: string } {
-  if (body === null || typeof body !== 'object') return false;
-  const o = body as { error?: unknown; message?: unknown };
-  return typeof o.error === 'string' && typeof o.message === 'string' && o.message.length > 0;
+/** Exactly `{error, message}`: both non-empty strings, `error` a bare code (no ":"). */
+function parseApiErrorBody(body: unknown): { error: string; message: string } {
+  assert.ok(
+    body !== null && typeof body === 'object' && !Array.isArray(body),
+    `expected {"error","message"} JSON, got ${JSON.stringify(body)}`,
+  );
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(
+    Object.keys(record).sort(),
+    ['error', 'message'],
+    `error body must have exactly keys error and message, got ${JSON.stringify(body)}`,
+  );
+  assert.equal(typeof record.error, 'string', `error must be a string, got ${JSON.stringify(body)}`);
+  assert.equal(typeof record.message, 'string', `message must be a string, got ${JSON.stringify(body)}`);
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0, 'error must be a non-empty string');
+  assert.ok(message.length > 0, 'message must be a non-empty string');
+  assert.equal(error.includes(':'), false, `error must be a bare code, got ${JSON.stringify(error)}`);
+  return { error, message };
 }
 
-/** New contract: bare `error` code plus a non-empty `message`. */
+/** New contract: bare `error` code plus a non-empty `message`, and no other keys. */
 async function readApiError(res: Response): Promise<{ error: string; message: string }> {
   assert.equal(res.headers.get('content-type')?.includes('application/json'), true);
-  const body: unknown = await res.json();
-  if (!isApiErrorBody(body)) {
-    assert.fail(`expected {"error","message"} JSON, got ${JSON.stringify(body)}`);
-  }
-  assert.equal(body.error.includes(':'), false, `error must be a bare code, got ${JSON.stringify(body.error)}`);
-  return body;
+  return parseApiErrorBody(await res.json());
 }
 
 function postJson(base: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
@@ -173,8 +187,7 @@ type LedgerView = {
   }[];
   today: {
     day: string;
-    totals?: Record<string, number>;
-    totalsByCurrency?: Record<string, Record<string, number>>;
+    totals: Record<string, Record<string, number>>;
   };
 };
 
@@ -252,21 +265,38 @@ test('replay while pay() is in flight is 409 in_progress', { timeout: 10_000 }, 
     createdAt: FIXED_NOW.toISOString(),
   });
   const first = postJson(base, '/intents', payload);
-  t.after(async () => {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
     slow.releasePay();
+  };
+  t.after(async () => {
+    release();
     await first.catch(() => undefined);
   });
 
   await slow.waitUntilPayEntered();
-  const second = await postJson(base, '/intents', payload);
-  assert.equal(slow.payCalls.n, 1);
-  assert.equal(second.status, 409);
-  const err = await readApiError(second);
-  assert.equal(err.error, 'in_progress');
+  const secondPromise = postJson(base, '/intents', payload);
+  // A server that does not answer 409 holds this request inside pay() until the
+  // 60s rail timeout. Release the gate so the response settles and the assertion
+  // fails instead of hanging.
+  const failFast = setTimeout(release, 1_500);
+  try {
+    const second = await secondPromise;
+    assert.equal(slow.payCalls.n, 1);
+    assert.equal(second.status, 409);
+    const err = await readApiError(second);
+    assert.equal(err.error, 'in_progress');
 
-  slow.releasePay();
-  const firstRes = await first;
-  assert.equal(firstRes.status, 201);
+    release();
+    const firstRes = await first;
+    assert.equal(firstRes.status, 201);
+  } finally {
+    clearTimeout(failFast);
+    release();
+    await first.catch(() => undefined);
+  }
 });
 
 test('refresh of needsManualResolve is 409 status_unsupported and points at resolve', async (t) => {
@@ -379,7 +409,7 @@ test('invalid initial policy rejects the intent with reason invalid_policy', asy
   assert.equal(reasonCode(body.decision), 'invalid_policy');
 });
 
-test('GET /ledger today totals are per currency and follow the active policy currency', async (t) => {
+test('GET /ledger today.totals is keyed by agentId with per-currency amounts', async (t) => {
   const { base } = await startTestServer(t);
 
   const usd = await postJson(base, '/intents', baseIntent({ id: 'pi_usd', amount: 10, currency: 'USD' }));
@@ -400,8 +430,7 @@ test('GET /ledger today totals are per currency and follow the active policy cur
   const ledger = await getLedger(base);
   assert.equal(ledger.entries.length, 2);
   assert.equal(ledger.today.day, '2026-10-28');
-  assert.deepEqual(ledger.today.totalsByCurrency?.[AGENT], { USD: 10, NEAR: 5 });
-  assert.equal(ledger.today.totals?.[AGENT], 10);
+  assert.deepEqual(ledger.today.totals[AGENT], { USD: 10, NEAR: 5 });
 });
 
 test('intent createdAt on a past day still counts today when it was approved today', async (t) => {
@@ -417,8 +446,7 @@ test('intent createdAt on a past day still counts today when it was approved tod
   const ledger = await getLedger(base);
   assert.equal(ledger.entries.length, 1);
   assert.equal(ledger.today.day, '2026-10-28');
-  assert.equal(ledger.today.totals?.[AGENT], 10);
-  assert.deepEqual(ledger.today.totalsByCurrency?.[AGENT], { USD: 10 });
+  assert.deepEqual(ledger.today.totals[AGENT], { USD: 10 });
 });
 
 test('non-JSON Content-Type with a non-empty body is 415 unsupported_media_type', async (t) => {
@@ -507,10 +535,8 @@ test('listener last-resort failure is 500 internal_error with a message', async 
   } catch {
     assert.fail(`last-resort body is not JSON: ${JSON.stringify(bodyOut)}`);
   }
-  if (!isApiErrorBody(parsed)) {
-    assert.fail(`expected {"error","message"}, got ${bodyOut}`);
-  }
-  assert.equal(parsed.error, 'internal_error');
+  const err = parseApiErrorBody(parsed);
+  assert.equal(err.error, 'internal_error');
 });
 
 test('forbidden Origin is 403 forbidden_origin', async (t) => {

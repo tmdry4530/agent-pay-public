@@ -56,11 +56,19 @@ async function startTestServer(
   return { base };
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ error: string; message: string }> {
   assert.equal(res.headers.get('content-type')?.includes('application/json'), true);
-  const body = (await res.json()) as { error?: string };
-  assert.equal(typeof body.error, 'string');
-  return body.error!;
+  const body: unknown = await res.json();
+  assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body));
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ['error', 'message']);
+  assert.equal(typeof record.error, 'string');
+  assert.equal(typeof record.message, 'string');
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0 && !error.includes(':'));
+  assert.ok(message.length > 0);
+  return { error, message };
 }
 
 async function ledgerEntryCount(base: string): Promise<number> {
@@ -85,7 +93,7 @@ test('M1: non-empty POST /intents without application/json returns 415 and no si
     const before = await ledgerEntryCount(base);
     const res = await fetch(`${base}/intents`, { method: 'POST', headers, body: jsonBody });
     assert.equal(res.status, 415, label);
-    assert.match(await readError(res), /^unsupported_media_type: /);
+    assert.equal((await readError(res)).error, 'unsupported_media_type');
     assert.equal(await ledgerEntryCount(base), before, label);
     assert.equal(counting.payCalls, 0, label);
   }
@@ -156,7 +164,7 @@ test('M1: PUT /policy with text/plain returns 415 and policy unchanged', async (
     body: JSON.stringify({ ...DEFAULT_POLICY, perTxMax: 999 }),
   });
   assert.equal(res.status, 415);
-  assert.match(await readError(res), /^unsupported_media_type: /);
+  assert.equal((await readError(res)).error, 'unsupported_media_type');
 
   const after = await fetch(`${base}/policy`);
   assert.deepEqual(await after.json(), DEFAULT_POLICY);
@@ -178,7 +186,7 @@ test('M1: non-empty approve body with wrong Content-Type returns 415 and intent 
     body: JSON.stringify({ approver: 'alice' }),
   });
   assert.equal(res.status, 415);
-  assert.match(await readError(res), /^unsupported_media_type: /);
+  assert.equal((await readError(res)).error, 'unsupported_media_type');
   assert.equal(counting.payCalls, 0);
 
   const ledger = await fetch(`${base}/ledger`);

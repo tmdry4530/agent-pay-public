@@ -43,11 +43,19 @@ async function startTestServer(t: { after: (fn: () => Promise<void>) => void }) 
   return { base, now };
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ error: string; message: string }> {
   assert.equal(res.headers.get('content-type')?.includes('application/json'), true);
-  const body = (await res.json()) as { error?: string };
-  assert.equal(typeof body.error, 'string');
-  return body.error!;
+  const body: unknown = await res.json();
+  assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body));
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ['error', 'message']);
+  assert.equal(typeof record.error, 'string');
+  assert.equal(typeof record.message, 'string');
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0 && !error.includes(':'));
+  assert.ok(message.length > 0);
+  return { error, message };
 }
 
 test('GET /health', async (t) => {
@@ -129,7 +137,7 @@ test('POST /intents replay and intent_conflict', async (t) => {
     body: JSON.stringify({ ...body, amount: 16 }),
   });
   assert.equal(conflict.status, 409);
-  assert.match(await readError(conflict), /^intent_conflict:/);
+  assert.equal((await readError(conflict)).error, 'intent_conflict');
 });
 
 test('POST approve, reject, and decision errors', async (t) => {
@@ -156,11 +164,11 @@ test('POST approve, reject, and decision errors', async (t) => {
     body: JSON.stringify({ approver: 'alice' }),
   });
   assert.equal(again.status, 409);
-  assert.match(await readError(again), /^already_paid:/);
+  assert.equal((await readError(again)).error, 'already_paid');
 
   const missing = await fetch(`${base}/intents/nope/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(missing.status, 404);
-  assert.match(await readError(missing), /^intent_not_found:/);
+  assert.equal((await readError(missing)).error, 'intent_not_found');
 
   await fetch(`${base}/intents`, {
     method: 'POST',
@@ -185,7 +193,7 @@ test('POST approve, reject, and decision errors', async (t) => {
     body: '{}',
   });
   assert.equal(approveRejected.status, 409);
-  assert.match(await readError(approveRejected), /^not_pending:/);
+  assert.equal((await readError(approveRejected)).error, 'not_pending');
 
   const emptyApprove = await fetch(`${base}/intents`, {
     method: 'POST',
@@ -221,7 +229,7 @@ test('validation and payload limits return JSON errors', async (t) => {
   for (const { body } of cases) {
     const res = await post(body);
     assert.equal(res.status, 400);
-    assert.match(await readError(res), /^invalid_body: /);
+    assert.equal((await readError(res)).error, 'invalid_body');
   }
 
   const badJson = await fetch(`${base}/intents`, {
@@ -230,7 +238,7 @@ test('validation and payload limits return JSON errors', async (t) => {
     body: '{',
   });
   assert.equal(badJson.status, 400);
-  assert.match(await readError(badJson), /^invalid_json: /);
+  assert.equal((await readError(badJson)).error, 'invalid_json');
 
   const oversized = 'x'.repeat(MAX_BODY_BYTES + 1);
   const tooLarge = await fetch(`${base}/intents`, {
@@ -239,7 +247,7 @@ test('validation and payload limits return JSON errors', async (t) => {
     body: oversized,
   });
   assert.equal(tooLarge.status, 413);
-  assert.match(await readError(tooLarge), /^payload_too_large/);
+  assert.equal((await readError(tooLarge)).error, 'payload_too_large');
 });
 
 test('GET /ledger entries and today totals', async (t) => {
@@ -331,7 +339,7 @@ test('GET and PUT /policy', async (t) => {
     body: JSON.stringify({ ...DEFAULT_POLICY, allowedPayees: undefined }),
   });
   assert.equal(badMissingPayees.status, 400);
-  assert.match(await readError(badMissingPayees), /^invalid_body: /);
+  assert.equal((await readError(badMissingPayees)).error, 'invalid_body');
 
   const badPerTx = await fetch(`${base}/policy`, {
     method: 'PUT',
@@ -426,14 +434,14 @@ test('unknown route and method not allowed', async (t) => {
 
   const nope = await fetch(`${base}/nope`);
   assert.equal(nope.status, 404);
-  assert.match(await readError(nope), /^not_found: /);
+  assert.equal((await readError(nope)).error, 'not_found');
 
   const delPolicy = await fetch(`${base}/policy`, { method: 'DELETE' });
   assert.equal(delPolicy.status, 405);
-  assert.match(await readError(delPolicy), /^method_not_allowed: /);
+  assert.equal((await readError(delPolicy)).error, 'method_not_allowed');
   assert.ok(delPolicy.headers.get('Allow')?.includes('GET'));
 
   const getIntents = await fetch(`${base}/intents`);
   assert.equal(getIntents.status, 405);
-  assert.match(await readError(getIntents), /^method_not_allowed: /);
+  assert.equal((await readError(getIntents)).error, 'method_not_allowed');
 });

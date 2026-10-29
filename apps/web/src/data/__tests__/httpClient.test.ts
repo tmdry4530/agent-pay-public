@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, apiErrorCode } from '../apiError';
+import { describeError } from '../describeError';
 import { createHttpClient } from '../httpClient';
 
 describe('createHttpClient', () => {
@@ -124,6 +125,42 @@ describe('createHttpClient', () => {
     });
     const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
     await expect(client.getPolicy()).rejects.toEqual(new ApiError(400, 'invalid_body: bad field'));
+  });
+
+  it('joins {error, message} so describeError still splits code and detail', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: async () => ({ error: 'status_unsupported', message: 'use POST /intents/:id/resolve' }),
+    });
+    const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
+    const caught = await client.refresh('pi_x').then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(caught).toEqual(new ApiError(409, 'status_unsupported: use POST /intents/:id/resolve'));
+    expect(apiErrorCode(caught)).toBe('status_unsupported');
+    const described = describeError(caught);
+    expect(described.code).toBe('status_unsupported');
+    expect(described.message).toBe('use POST /intents/:id/resolve');
+  });
+
+  it('keeps an old single-field error body so describeError still parses the code', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: async () => ({ error: 'status_unsupported: use POST /intents/:id/resolve' }),
+    });
+    const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
+    const caught = await client.getPolicy().then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(caught).toEqual(new ApiError(409, 'status_unsupported: use POST /intents/:id/resolve'));
+    expect(apiErrorCode(caught)).toBe('status_unsupported');
+    expect(describeError(caught).code).toBe('status_unsupported');
   });
 
   describe('POST /intents/:id/refresh', () => {

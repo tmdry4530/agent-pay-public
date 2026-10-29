@@ -67,11 +67,19 @@ async function startTestServer(
   return { base, now };
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ error: string; message: string }> {
   assert.equal(res.headers.get('content-type')?.includes('application/json'), true);
-  const body = (await res.json()) as { error?: string };
-  assert.equal(typeof body.error, 'string');
-  return body.error!;
+  const body: unknown = await res.json();
+  assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body));
+  const record = body as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ['error', 'message']);
+  assert.equal(typeof record.error, 'string');
+  assert.equal(typeof record.message, 'string');
+  const error = record.error as string;
+  const message = record.message as string;
+  assert.ok(error.length > 0 && !error.includes(':'));
+  assert.ok(message.length > 0);
+  return { error, message };
 }
 
 function postIntent(
@@ -124,7 +132,7 @@ test('H2: invalid Idempotency-Key returns 400 invalid_header', async (t) => {
   for (const key of ['', '!!!', 'x'.repeat(129)]) {
     const res = await postIntent(base, baseIntent(), { 'Idempotency-Key': key });
     assert.equal(res.status, 400, `key=${JSON.stringify(key)}`);
-    assert.match(await readError(res), /^invalid_header: /);
+    assert.equal((await readError(res)).error, 'invalid_header');
   }
 });
 
@@ -135,7 +143,7 @@ test('H2: Idempotency-Key and body id must match when both present', async (t) =
     'Idempotency-Key': 'other-key',
   });
   assert.equal(mismatch.status, 400);
-  assert.match(await readError(mismatch), /^invalid_body: /);
+  assert.equal((await readError(mismatch)).error, 'invalid_body');
 
   const match = await postIntent(base, baseIntent({ id: 'pi_same' }), {
     'Idempotency-Key': 'pi_same',
@@ -202,7 +210,7 @@ test('H2: same Idempotency-Key with different body returns intent_conflict', asy
 
   const conflict = await postIntent(base, baseIntent({ amount: 11 }), { 'Idempotency-Key': key });
   assert.equal(conflict.status, 409);
-  assert.match(await readError(conflict), /^intent_conflict:/);
+  assert.equal((await readError(conflict)).error, 'intent_conflict');
 });
 
 test('H2: same body id without createdAt but different amount returns intent_conflict', async (t) => {
@@ -212,7 +220,7 @@ test('H2: same body id without createdAt but different amount returns intent_con
 
   const conflict = await postIntent(base, baseIntent({ id: 'pi_conflict_amt', amount: 11 }));
   assert.equal(conflict.status, 409);
-  assert.match(await readError(conflict), /^intent_conflict:/);
+  assert.equal((await readError(conflict)).error, 'intent_conflict');
 });
 
 test('H2: needs_approval intent retried with same Idempotency-Key replays', async (t) => {
