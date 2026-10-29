@@ -44,7 +44,7 @@ All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
 |---|---|---|
 | `GET /health` | | `200 {ok: true, rail}` |
 | `GET /rail` | | `200 {rail, currency, amountScale, payees}` — demo mapping for agents (defaults: policy currency, scale 1, `{}`) |
-| `POST /intents` | `{agentId, payee, amount, currency, purpose, id?, createdAt?}` | `201` (new) / `200` (replay) `PaymentResult & {intent}` = `{intentId, status: paid\|rejected\|needs_approval\|failed, decision, receipt?, error?, replayed?, intent}` |
+| `POST /intents` | `{agentId, payee, amount, currency, purpose, id?, createdAt?}`; optional `Idempotency-Key` header | `201` (new) / `200` (replay) `PaymentResult & {intent}` = `{intentId, status: paid\|rejected\|needs_approval\|failed, decision, receipt?, error?, replayed?, intent}` |
 | `POST /intents/:id/approve` | optional `{approver?}` | `200 PaymentResult` (`paid`, or `rejected` if the re-check fails) |
 | `POST /intents/:id/reject` | optional `{approver?, note?}` | `200 PaymentResult` (`rejected`, reason `rejected_by_human: …`) |
 | `POST /intents/:id/refresh` | optional empty body | `200 PaymentResult & {changed: boolean}` — polls the adapter's `status()` for a **pending** receipt on this rail; settles the ledger when the rail reports `succeeded` or `failed`. Still `pending` → `changed: false`, no ledger write. |
@@ -55,8 +55,11 @@ All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
 
 **Client-supplied intent fields:** `agentId`, `payee`, `amount` (finite number > 0), `currency`, `purpose` are
 required. `id` (1–128 chars of `[A-Za-z0-9._:-]`) and `createdAt` (ISO 8601 with a zone) are optional; the server
-fills in `pi_<uuid>` and the current time. Unknown fields are rejected. For an idempotent retry, send the same `id`
-**and** `createdAt`: the core replay needs a deep-equal intent, otherwise the retry is a `409 intent_conflict`.
+fills in `pi_<uuid>` and the current time. Unknown fields are rejected. Core replay needs a deep-equal intent, so a
+different body for the same id is `409 intent_conflict`. Optional header `Idempotency-Key` uses the same charset as
+`id` (invalid → `400 invalid_header`). When the body omits `id`, that key is the intent id; when both are set they
+must match (`400 invalid_body` if they differ). If `createdAt` is omitted and that id is already stored, the server
+reuses the stored `createdAt` so the retry replays.
 
 **`GET /ledger` entries** are core `LedgerEntry` objects as stored, including `decisions`: every decision, oldest
 first, as `{status, reason, at, actor?}` (`actor` is `policy` or the approver). `decision` is still the latest one.
@@ -83,7 +86,7 @@ batches with 2+ items). The route never calls the adapter (`pay()` or `status()`
   (already settled, including a second resolve).
 - No auth: like the rest of this demo API it is meant for localhost only; `resolvedBy` is self-reported.
 
-**Status codes:** `400` `invalid_body` / `invalid_json` / `invalid_path`; `403` `forbidden_origin` (disallowed
+**Status codes:** `400` `invalid_body` / `invalid_json` / `invalid_path` / `invalid_header`; `403` `forbidden_origin` (disallowed
 `Origin` on non-safe methods); `404` `not_found` (route) or
 `intent_not_found`; `405` `method_not_allowed` (with `Allow`); `409` `already_paid`, `not_pending`, `in_progress`,
 `intent_conflict`, `no_receipt`, `receipt_not_pending`, `status_unsupported`; `502` `status_check_failed`; `413` `payload_too_large` (body cap 64 KiB); `500` `internal_error`. Policy rejections are not
@@ -91,7 +94,7 @@ HTTP errors: they come back as `status: "rejected"` results.
 
 **CORS:** only `http://localhost:<port>` and `http://127.0.0.1:<port>` origins are echoed in
 `Access-Control-Allow-Origin` (with `Vary: Origin`). `OPTIONS` answers `204` with `Allow`; for an allowed origin it
-adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type` and `Max-Age: 600`. Other origins
+adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type, Idempotency-Key` and `Max-Age: 600`. Other origins
 get no CORS headers.
 
 **Origin (CSRF):** for methods other than `GET`, `HEAD`, and `OPTIONS`, if the request sends an `Origin` header that

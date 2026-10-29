@@ -13,7 +13,7 @@ import {
   type PaymentErrorCode,
   type Policy,
 } from '@agent-pay/core';
-import { ValidationError, parseDecisionBody, parseIntentBody, parsePolicy } from './validate.ts';
+import { ValidationError, parseDecisionBody, parseIdempotencyKey, parseIntentBody, parsePolicy } from './validate.ts';
 import { resolveRoute } from './resolve-route.ts';
 
 /** Seed policy for demos. Replace at runtime with PUT /policy. */
@@ -117,7 +117,13 @@ export function createApp(options: AppOptions) {
       pattern: /^\/intents$/,
       methods: {
         POST: async (req) => {
-          const intent = parseIntentBody(await readJson(req), { id: newId, now });
+          const raw = await readJson(req);
+          const idempotencyKey = parseIdempotencyKey(req.headers['idempotency-key']);
+          const intent = parseIntentBody(raw, { id: newId, now, idempotencyKey });
+          if (shouldReuseStoredCreatedAt(raw, idempotencyKey)) {
+            const existing = await ledger.get(intent.id);
+            if (existing) intent.createdAt = existing.intent.createdAt;
+          }
           const result = await runPayment(intent, policy, ledger, adapter);
           return { status: result.replayed ? 200 : 201, body: { ...result, intent } };
         },
@@ -199,7 +205,7 @@ export function createApp(options: AppOptions) {
         const headers: Record<string, string> = { ...cors, Allow: allow };
         if (cors['Access-Control-Allow-Origin']) {
           headers['Access-Control-Allow-Methods'] = allow;
-          headers['Access-Control-Allow-Headers'] = 'Content-Type';
+          headers['Access-Control-Allow-Headers'] = 'Content-Type, Idempotency-Key';
           headers['Access-Control-Max-Age'] = '600';
         }
         res.writeHead(204, headers).end();
@@ -238,6 +244,13 @@ export function createApp(options: AppOptions) {
 /** createApp + node:http server (not listening yet). */
 export function createServer(options: AppOptions): Server {
   return createHttpServer(createApp(options).listener);
+}
+
+/** True when createdAt was omitted and the id comes from the body or Idempotency-Key. */
+function shouldReuseStoredCreatedAt(body: unknown, idempotencyKey: string | undefined): boolean {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return false;
+  const o = body as Record<string, unknown>;
+  return o.createdAt === undefined && (idempotencyKey !== undefined || o.id !== undefined);
 }
 
 function decodeParam(raw: string): string {

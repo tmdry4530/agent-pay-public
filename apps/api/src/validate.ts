@@ -45,6 +45,20 @@ function num(obj: Obj, key: string, { positive }: { positive: boolean }): number
 
 const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
+const ID_RULE = '1-128 characters of [A-Za-z0-9._:-]';
+
+/**
+ * Optional `Idempotency-Key` header. Absent → undefined.
+ * Same charset as an intent id; anything else is `invalid_header`.
+ */
+export function parseIdempotencyKey(value: string | string[] | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const key = Array.isArray(value) ? (value.length === 1 ? value[0] : value.join(',')) : value;
+  if (typeof key !== 'string' || !ID_RE.test(key)) {
+    throw new ValidationError('invalid_header', `"Idempotency-Key" must be ${ID_RULE}`);
+  }
+  return key;
+}
 
 /** Client-supplied fields of POST /intents. */
 export const INTENT_REQUIRED = ['agentId', 'payee', 'amount', 'currency', 'purpose'] as const;
@@ -53,11 +67,15 @@ export const INTENT_OPTIONAL = ['id', 'createdAt'] as const;
 /**
  * Validates a POST /intents body and fills in server defaults:
  * - required: agentId, payee, amount (finite > 0), currency, purpose
- * - optional: id (1-128 of [A-Za-z0-9._:-]; default "pi_<uuid>"),
+ * - optional: id (1-128 of [A-Za-z0-9._:-]; default gen.idempotencyKey, else gen.id()),
  *   createdAt (ISO 8601 with a zone; default now). createdAt is kept verbatim.
+ * When both body id and gen.idempotencyKey are set, they must be equal.
  * Unknown fields are rejected.
  */
-export function parseIntentBody(body: unknown, gen: { id: () => string; now: () => Date }): PaymentIntent {
+export function parseIntentBody(
+  body: unknown,
+  gen: { id: () => string; now: () => Date; idempotencyKey?: string },
+): PaymentIntent {
   const o = asObject(body, 'body');
   onlyKeys(o, [...INTENT_REQUIRED, ...INTENT_OPTIONAL], 'body');
   const agentId = str(o, 'agentId', 128);
@@ -65,10 +83,13 @@ export function parseIntentBody(body: unknown, gen: { id: () => string; now: () 
   const amount = num(o, 'amount', { positive: true });
   const currency = str(o, 'currency', 16);
   const purpose = str(o, 'purpose', 1000);
+  const key = gen.idempotencyKey;
   let id: string;
-  if (o.id === undefined) id = gen.id();
-  else if (typeof o.id === 'string' && ID_RE.test(o.id)) id = o.id;
-  else throw bad('"id" must be 1-128 characters of [A-Za-z0-9._:-]');
+  if (o.id === undefined) id = key ?? gen.id();
+  else if (typeof o.id === 'string' && ID_RE.test(o.id)) {
+    if (key !== undefined && o.id !== key) throw bad('"id" must match Idempotency-Key');
+    id = o.id;
+  } else throw bad(`"id" must be ${ID_RULE}`);
   let createdAt: string;
   if (o.createdAt === undefined) createdAt = gen.now().toISOString();
   else if (typeof o.createdAt === 'string' && ISO_RE.test(o.createdAt) && !Number.isNaN(Date.parse(o.createdAt))) {
