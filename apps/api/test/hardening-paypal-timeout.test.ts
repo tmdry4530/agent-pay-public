@@ -127,7 +127,7 @@ test('paypalFactory: PAYPAL_TIMEOUT_MS aborts hung PayPal HTTP within configured
   });
 
   const seed = railSeed('paypal');
-  const adapter = paypalFactory({
+  const adapter = await paypalFactory({
     env: { ...basePayPalEnv, PAYPAL_TIMEOUT_MS: '30' },
     now: NOW,
   });
