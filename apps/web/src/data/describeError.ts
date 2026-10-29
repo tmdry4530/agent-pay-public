@@ -60,7 +60,6 @@ export function describeError(err: unknown): DescribedError {
       };
     }
     if (err.status >= 400) {
-      const nonRetry = new Set(['receipt_not_pending', 'status_unsupported', 'conflict']);
       return {
         kind: 'client',
         status: err.status,
@@ -68,7 +67,7 @@ export function describeError(err: unknown): DescribedError {
         title: `Request rejected (${err.status})`,
         message: detail || err.message,
         hint: 'Fix the request or choose a different action.',
-        retryable: !nonRetry.has(code),
+        retryable: false,
       };
     }
   }

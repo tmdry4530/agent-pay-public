@@ -36,6 +36,7 @@ describe('deriveIntentFlow', () => {
         ],
         paymentStatus: 'paid',
         receipt: {
+          intentId: 'i1',
           status: 'succeeded',
           rail: 'mock',
           externalId: 'mock_1',
@@ -87,6 +88,7 @@ describe('deriveIntentFlow', () => {
         ],
         paymentStatus: 'paid',
         receipt: {
+          intentId: 'i1',
           status: 'succeeded',
           rail: 'paypal',
           externalId: 'x',
@@ -162,6 +164,7 @@ describe('deriveIntentFlow', () => {
         ],
         paymentStatus: 'paid',
         receipt: {
+          intentId: 'i1',
           status: 'pending',
           rail: 'mock',
           externalId: 'mock_p',
@@ -182,6 +185,7 @@ describe('deriveIntentFlow', () => {
         ],
         paymentStatus: 'paid',
         receipt: {
+          intentId: 'i1',
           status: 'succeeded',
           rail: 'mock',
           externalId: 'mock_2',

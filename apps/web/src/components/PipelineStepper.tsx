@@ -1,10 +1,10 @@
-import type { RefObject } from 'react';
+import type { Ref } from 'react';
 import type { PipelineStepView } from '../data/intentFlow';
 import { stepperStateText } from '../data/intentFlow';
 
 type Props = {
   steps: PipelineStepView[];
-  stepperRef: RefObject<HTMLOListElement | null>;
+  stepperRef: Ref<HTMLOListElement>;
   mobileLabel: string;
 };
 

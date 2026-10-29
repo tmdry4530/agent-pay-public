@@ -9,10 +9,6 @@ export function PendingTimer({ sinceIso }: Props) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    const prefersReduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReduced) return;
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);

@@ -2,7 +2,6 @@
   max-width: 1280px;
   margin: 0 auto;
   padding: 1.25rem 1.5rem 2.5rem;
-  overflow-x: hidden;
 }
 
 .header {
@@ -11,12 +10,16 @@
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1.75rem;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .header__brand {
   display: flex;
   gap: 1rem;
   align-items: center;
+  min-width: 0;
+  flex: 1 1 12rem;
 }
 
 .logo-mark {
@@ -56,7 +59,11 @@
   text-transform: uppercase;
   white-space: normal;
   text-align: right;
-  max-width: min(100%, 20rem);
+  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mock-badge--inline {
@@ -179,6 +186,8 @@
   gap: 0.2rem;
   overflow-x: auto;
   scrollbar-width: thin;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .stepper__step {
@@ -308,8 +317,9 @@
 .quote-card dl div,
 .receipt-card dl div {
   display: grid;
-  grid-template-columns: 6rem 1fr;
+  grid-template-columns: minmax(4rem, 6rem) minmax(0, 1fr);
   gap: 0.5rem;
+  min-width: 0;
 }
 
 dt {
@@ -320,6 +330,9 @@ dt {
 dd {
   margin: 0;
   font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .decision-status {
@@ -348,6 +361,8 @@ dd {
 
 .rail-toggle {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 3px;
   border-radius: 10px;
   background: var(--bg);
@@ -763,11 +778,6 @@ dd {
 
 .unavailable {
   font-style: italic;
-}
-
-.quote-card dl div,
-.receipt-card dl div {
-  grid-template-columns: minmax(4rem, 6rem) minmax(0, 1fr);
 }
 
 .sidebar {

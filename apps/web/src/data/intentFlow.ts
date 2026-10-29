@@ -202,8 +202,6 @@ export function deriveIntentFlow(entry: LedgerEntry): IntentFlowView {
     overall = 'awaiting_approval';
   } else if (entry.paymentStatus === 'paid' && entry.receipt?.status === 'succeeded') {
     overall = 'paid';
-  } else if (entry.receipt?.status === 'pending') {
-    overall = 'pending';
   }
 
   return {
