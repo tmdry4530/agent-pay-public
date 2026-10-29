@@ -6,6 +6,8 @@ import { LedgerError } from '@agent-pay/core/errors.ts';
 import type { AgentPayClient, IntentDraft, LedgerSnapshot } from './agentPayClient';
 import { ApiError } from './apiError';
 import { MemoryLedger, utcDay } from './memoryLedger';
+import { resolveIntentMemory } from './memoryResolve';
+import type { ResolveRequest } from './compat';
 import { refreshIntent } from './refreshIntent';
 import { createMockAdapters, type PendingSettlementConfig } from './rails/mockAdapters';
 
@@ -19,7 +21,7 @@ export const DEMO_POLICY: Policy = {
   currency: 'USD',
 };
 
-export type PayOutcome = 'normal' | 'throw' | 'timeout' | 'mismatch';
+export type PayOutcome = 'normal' | 'throw' | 'timeout' | 'mismatch' | 'hang';
 
 export type InMemoryClientOptions = {
   policy?: Policy;
@@ -69,9 +71,9 @@ function wrapAdapterPay(
       throw new Error('mock rail unreachable');
     }
 
-    if (payOutcome === 'timeout') {
+    if (payOutcome === 'timeout' || payOutcome === 'hang') {
       return new Promise<Receipt>(() => {
-        /* never resolves — orchestrator payTimeoutMs fires */
+        /* never resolves — orchestrator payTimeoutMs fires (unless disabled for hang) */
       });
     }
 
@@ -99,7 +101,12 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
   const payDelayMs = options.payDelayMs ?? 0;
   const payOutcome = options.payOutcome ?? 'normal';
   const payTimeoutMs =
-    options.payTimeoutMs ?? (payOutcome === 'timeout' ? DEFAULT_SIM_TIMEOUT_MS : undefined);
+    options.payTimeoutMs ??
+    (payOutcome === 'timeout'
+      ? DEFAULT_SIM_TIMEOUT_MS
+      : payOutcome === 'hang'
+        ? Number.POSITIVE_INFINITY
+        : undefined);
   const paymentOptions = payTimeoutMs !== undefined ? { payTimeoutMs } : {};
 
   const ledger = new MemoryLedger({ now });
@@ -185,6 +192,20 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
     async refresh(intentId: string) {
       const rail = railsByIntent.get(intentId) ?? 'mock';
       return refreshIntent(intentId, ledger, adapters[rail]);
+    },
+
+    async resolve(intentId: string, req: ResolveRequest) {
+      return resolveIntentMemory(
+        intentId,
+        asCoreLedger,
+        {
+          status: req.status,
+          note: req.note,
+          resolvedBy: req.resolvedBy,
+          ...(req.externalId !== undefined ? { externalId: req.externalId } : {}),
+        },
+        now,
+      );
     },
 
     async getLedger() {

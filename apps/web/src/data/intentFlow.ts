@@ -1,6 +1,7 @@
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import type { DecisionRecord, LedgerEntry } from '@agent-pay/core';
-import { isSubmitting, isSubmittingResult, needsManualResolve, NEEDS_CHECK_PENDING_LABEL } from './compat';
+import { isSubmitting, isSubmittingResult, isStuckSubmitting, needsManualResolve, NEEDS_CHECK_PENDING_LABEL, STUCK_LABEL } from './compat';
+import type { ReceiptResolution } from '@agent-pay/core';
 import type { PaymentResult, PipelineStep } from '../types';
 
 export const PENDING_SLOW_MS = 30_000;
@@ -36,10 +37,16 @@ export type FlowStage = {
   detail?: string;
 };
 
+export type IntentFlowResolution = Pick<
+  ReceiptResolution,
+  'status' | 'resolvedBy' | 'note' | 'at' | 'previousExternalId'
+>;
+
 export type IntentFlowView = {
   stages: FlowStage[];
   overall: IntentFlowOverall;
   overallLabel: string;
+  resolution?: IntentFlowResolution;
 };
 
 const STAGE_LABELS: Record<FlowStageId, string> = {
@@ -95,11 +102,12 @@ function terminalBeforePayment(
   return null;
 }
 
-export function deriveIntentFlow(entry: LedgerEntry): IntentFlowView {
+export function deriveIntentFlow(entry: LedgerEntry, now?: Date): IntentFlowView {
   const records = decisionRecords(entry);
   const policy = policyRecord(records);
   const human = humanRecord(records);
   const terminal = terminalBeforePayment(policy, human);
+  const stuck = now !== undefined && isStuckSubmitting(entry, now);
 
   const intentStage: FlowStage = {
     id: 'intent',
@@ -202,7 +210,7 @@ export function deriveIntentFlow(entry: LedgerEntry): IntentFlowView {
     id: 'payment',
     state: paymentState,
     label: STAGE_LABELS.payment,
-    detail: isSubmitting(entry) ? 'submitting' : entry.paymentStatus,
+    detail: stuck ? STUCK_LABEL : isSubmitting(entry) ? 'submitting' : entry.paymentStatus,
   };
 
   const receiptStage: FlowStage = {
@@ -221,7 +229,18 @@ export function deriveIntentFlow(entry: LedgerEntry): IntentFlowView {
   return {
     stages: [intentStage, policyStage, approvalStage, paymentStage, receiptStage],
     overall,
-    overallLabel: overallLabel(overall),
+    overallLabel: stuck && overall === 'submitting' ? STUCK_LABEL : overallLabel(overall),
+    ...(entry.resolution
+      ? {
+          resolution: {
+            status: entry.resolution.status,
+            resolvedBy: entry.resolution.resolvedBy,
+            note: entry.resolution.note,
+            at: entry.resolution.at,
+            previousExternalId: entry.resolution.previousExternalId,
+          },
+        }
+      : {}),
   };
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, apiErrorCode } from '../apiError';
+import { RACE_409_CODES } from '../compat';
 import { createHttpClient } from '../httpClient';
 
 describe('createHttpClient', () => {
@@ -124,6 +125,119 @@ describe('createHttpClient', () => {
     });
     const client = createHttpClient({ baseUrl: 'http://127.0.0.1:8787', fetch: fetchMock });
     await expect(client.getPolicy()).rejects.toEqual(new ApiError(400, 'invalid_body: bad field'));
+  });
+
+  describe('409 race error shapes', () => {
+    const base = 'http://127.0.0.1:8787';
+
+    it.each(RACE_409_CODES)('legacy combined error for %s', async (code) => {
+      const legacy = `${code}: detail from server`;
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        json: async () => ({ error: legacy }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      let caught: unknown;
+      try {
+        await client.getPolicy();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toEqual(new ApiError(409, legacy));
+      expect(apiErrorCode(caught)).toBe(code);
+    });
+
+    it.each(RACE_409_CODES)('new { error, message } shape for %s', async (code) => {
+      const detail = `human detail for ${code}`;
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        json: async () => ({ error: code, message: detail }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      let caught: unknown;
+      try {
+        await client.getPolicy();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toEqual(new ApiError(409, `${code}: ${detail}`, { code, detail }));
+      expect(apiErrorCode(caught)).toBe(code);
+    });
+  });
+
+  describe('POST /intents/:id/resolve', () => {
+    const base = 'http://127.0.0.1:8787';
+    const intentId = 'pi/resolve';
+
+    it('sends exact body fields', async () => {
+      const body = {
+        intentId,
+        status: 'paid',
+        changed: true,
+        decision: { status: 'approved', reason: 'within_policy: ok' },
+        receipt: {
+          intentId,
+          rail: 'mock',
+          externalId: 'x',
+          status: 'succeeded',
+          at: '2026-01-01T00:00:00.000Z',
+        },
+        resolution: {
+          status: 'succeeded',
+          resolvedBy: 'ops',
+          note: 'ok',
+          at: '2026-01-01T00:00:01.000Z',
+          previousExternalId: '',
+        },
+      };
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      await client.resolve(intentId, { status: 'succeeded', note: 'ok', resolvedBy: 'ops' });
+      expect(fetchMock).toHaveBeenCalledWith(
+        `${base}/intents/pi%2Fresolve/resolve`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ status: 'succeeded', note: 'ok', resolvedBy: 'ops' }),
+        }),
+      );
+    });
+
+    it('includes externalId when provided', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          intentId: 'a',
+          status: 'paid',
+          changed: true,
+          decision: { status: 'approved', reason: 'x: y' },
+          receipt: { intentId: 'a', rail: 'mock', externalId: 'e', status: 'succeeded', at: '2026-01-01T00:00:00.000Z' },
+          resolution: {
+            status: 'succeeded',
+            resolvedBy: 'ops',
+            note: 'n',
+            at: '2026-01-01T00:00:01.000Z',
+            previousExternalId: '',
+          },
+        }),
+      });
+      const client = createHttpClient({ baseUrl: base, fetch: fetchMock });
+      await client.resolve('a', {
+        status: 'failed',
+        note: 'n',
+        resolvedBy: 'ops',
+        externalId: 'ext-1',
+      });
+      expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
+        status: 'failed',
+        note: 'n',
+        resolvedBy: 'ops',
+        externalId: 'ext-1',
+      });
+    });
   });
 
   describe('POST /intents/:id/refresh', () => {

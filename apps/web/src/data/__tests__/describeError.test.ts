@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../apiError';
+import { RACE_409_CODES } from '../compat';
 import { describeError } from '../describeError';
 
 describe('describeError', () => {
@@ -35,5 +36,27 @@ describe('describeError', () => {
     const d = describeError(new ApiError(409, 'rail_mismatch: wrong rail'));
     expect(d.kind).toBe('rail_mismatch');
     expect(d.retryable).toBe(false);
+  });
+
+  describe('already_processed race409 codes', () => {
+    it.each(RACE_409_CODES)('legacy shape %s', (code) => {
+      const d = describeError(new ApiError(409, `${code}: server detail`), { action: 'approve' });
+      expect(d.kind).toBe('already_processed');
+      expect(d.code).toBe(code);
+      expect(d.retryable).toBe(false);
+      if (code === 'not_pending') {
+        expect(d.message).toBe(
+          'This intent was already approved or rejected by someone else. Showing the latest state.',
+        );
+      }
+    });
+
+    it.each(RACE_409_CODES)('new ApiError shape %s', (code) => {
+      const detail = 'detail text';
+      const d = describeError(new ApiError(409, `${code}: ${detail}`, { code, detail }), { action: 'reject' });
+      expect(d.kind).toBe('already_processed');
+      expect(d.code).toBe(code);
+      expect(d.retryable).toBe(false);
+    });
   });
 });

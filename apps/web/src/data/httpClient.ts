@@ -1,6 +1,7 @@
-import type { PaymentIntent, PaymentResult, Policy, Rail } from '@agent-pay/core';
+import type { PaymentIntent, PaymentResult, Policy, Rail, ReceiptResolution } from '@agent-pay/core';
 import { ApiError } from './apiError';
 import type { AgentPayClient, IntentDraft, LedgerSnapshot } from './agentPayClient';
+import type { ResolveRequest } from './compat';
 
 export type HttpClientOptions = {
   baseUrl: string;
@@ -11,14 +12,26 @@ function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ message: string; code?: string; detail?: string }> {
   try {
-    const body = (await res.json()) as { error?: string };
-    if (typeof body.error === 'string' && body.error.length > 0) return body.error;
+    const body = (await res.json()) as { error?: string; message?: string };
+    if (typeof body.error === 'string' && body.error.length > 0) {
+      if (
+        typeof body.message === 'string' &&
+        body.message.length > 0 &&
+        !body.error.includes(':')
+      ) {
+        const code = body.error;
+        const detail = body.message;
+        return { message: `${code}: ${detail}`, code, detail };
+      }
+      return { message: body.error };
+    }
   } catch {
     /* ignore */
   }
-  return res.statusText || `HTTP ${res.status}`;
+  const fallback = res.statusText || `HTTP ${res.status}`;
+  return { message: fallback };
 }
 
 /**
@@ -50,7 +63,12 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
       throw e;
     }
     if (!res.ok) {
-      throw new ApiError(res.status, await readError(res));
+      const errBody = await readError(res);
+      throw new ApiError(
+        res.status,
+        errBody.message,
+        errBody.code !== undefined ? { code: errBody.code, detail: errBody.detail } : undefined,
+      );
     }
     return (await res.json()) as T;
   }
@@ -101,6 +119,22 @@ export function createHttpClient(options: HttpClientOptions): AgentPayClient {
       return request<PaymentResult & { changed: boolean }>(
         `/intents/${encodeURIComponent(intentId)}/refresh`,
         { method: 'POST', body: '{}' },
+      );
+    },
+
+    resolve(
+      intentId: string,
+      req: ResolveRequest,
+    ): Promise<PaymentResult & { changed: true; resolution: ReceiptResolution }> {
+      const body: Record<string, string> = {
+        status: req.status,
+        note: req.note,
+        resolvedBy: req.resolvedBy,
+      };
+      if (req.externalId !== undefined) body.externalId = req.externalId;
+      return request<PaymentResult & { changed: true; resolution: ReceiptResolution }>(
+        `/intents/${encodeURIComponent(intentId)}/resolve`,
+        { method: 'POST', body: JSON.stringify(body) },
       );
     },
 

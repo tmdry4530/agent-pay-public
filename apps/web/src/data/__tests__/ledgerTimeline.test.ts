@@ -2,6 +2,7 @@ import { ReasonCode } from '@agent-pay/core/policy.ts';
 import type { LedgerEntry, PaymentIntent } from '@agent-pay/core';
 import { describe, expect, it } from 'vitest';
 import { entriesToTimeline } from '../ledgerTimeline';
+import { STUCK_LABEL, STUCK_SUBMITTING_MS } from '../compat';
 
 const baseIntent: PaymentIntent = {
   id: 'intent-75',
@@ -134,8 +135,29 @@ describe('entriesToTimeline', () => {
         meta: { needsManualResolve: 'true', error: 'timeout' },
       } as LedgerEntry['receipt'],
     });
-    const manualEv = entriesToTimeline([manual]).find((e) => e.label === 'payment needs check (pending)');
-    expect(manualEv?.warn).toBe(true);
+    const manualEvents = entriesToTimeline([manual]).filter(
+      (e) => e.label === 'payment needs check (pending)',
+    );
+    expect(manualEvents).toHaveLength(1);
+    expect(manualEvents[0]).toMatchObject({
+      id: 'manual-needs-check',
+      warn: true,
+      kind: 'payment',
+    });
+  });
+
+  it('stuck submitting shows STUCK_LABEL with warn', () => {
+    const anchor = '2026-01-01T10:01:00.000Z';
+    const now = new Date(Date.parse(anchor) + STUCK_SUBMITTING_MS + 1);
+    const submitting = entry({
+      intent: { ...baseIntent, id: 'stuck' },
+      decisions: [{ status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, at: '2026-01-01T10:00:00.000Z' }],
+      paymentStatus: 'submitting' as unknown as LedgerEntry['paymentStatus'],
+      submission: { rail: 'mock', at: anchor },
+      updatedAt: anchor,
+    });
+    const ev = entriesToTimeline([submitting], now).find((e) => e.id === 'stuck-stuck');
+    expect(ev).toMatchObject({ label: STUCK_LABEL, warn: true, kind: 'payment' });
   });
 
   it('tie-breaks equal timestamps within one intent (resolution > receipt > payment > decisions > intent)', () => {
