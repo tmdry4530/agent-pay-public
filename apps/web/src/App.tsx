@@ -572,13 +572,15 @@ export default function App({ clock = systemClock }: AppProps) {
       ? `API: ${apiBase}`
       : 'MOCK — no real funds';
 
-  const quoteIntent = draft
-    ? {
-        ...draft,
-        id: draft.id ?? '—',
-        createdAt: draft.createdAt ?? '—',
-      }
-    : null;
+  const quoteIntent =
+    intent ??
+    (draft
+      ? {
+          ...draft,
+          id: draft.id ?? '—',
+          createdAt: draft.createdAt ?? '—',
+        }
+      : null);
 
   const pipelineDisabled = !apiConnected || busy;
   const railMismatch = detectRailMismatch({
@@ -753,7 +755,7 @@ export default function App({ clock = systemClock }: AppProps) {
           )}
 
           {quoteIntent && (
-            <div className="quote-card">
+            <div className="quote-card" data-testid="quote-card">
               <h3>PaymentIntent (draft)</h3>
               <dl>
                 <div>
