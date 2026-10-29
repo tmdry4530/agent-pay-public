@@ -8,15 +8,26 @@ type Props = {
 
 export function ErrorBanner({ error, onRetry, onDismiss }: Props) {
   const isInfo = error.kind === 'already_processed';
+  const isConflict = error.kind === 'conflict';
+  const testId = isInfo ? 'race-banner' : isConflict ? 'conflict-banner' : 'error-banner';
+  const role = isInfo ? 'status' : 'alert';
+  const className = [
+    'error-banner',
+    isInfo ? 'error-banner--info' : '',
+    isConflict ? 'error-banner--conflict' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <div
-      className={`error-banner${isInfo ? ' error-banner--info' : ''}`}
-      data-testid={isInfo ? 'race-banner' : 'error-banner'}
-      {...(isInfo ? { 'data-code': error.code } : {})}
-      role={isInfo ? 'status' : 'alert'}
+      className={className}
+      data-testid={testId}
+      {...(isInfo || isConflict ? { 'data-code': error.code } : {})}
+      role={role}
     >
       <p className="error-banner__title">{error.title}</p>
-      {isInfo ? (
+      {isInfo || isConflict ? (
         <p className="error-banner__message">{error.message}</p>
       ) : (
         <p className="error">

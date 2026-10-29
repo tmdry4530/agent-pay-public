@@ -83,10 +83,12 @@ describe('compat', () => {
       expect(isAlreadyProcessed(new ApiError(409, 'intent_conflict: x'))).toBe(false);
     });
 
-    it('approve/reject treats unknown 409 as race except intent_conflict', () => {
+    it('approve/reject only treats RACE_409_CODES and empty-code 409 as race', () => {
       expect(isAlreadyProcessed(new ApiError(409, 'in_progress: x'), { action: 'approve' })).toBe(true);
       expect(isAlreadyProcessed(new ApiError(409, 'intent_conflict: x'), { action: 'approve' })).toBe(false);
-      expect(isAlreadyProcessed(new ApiError(409, 'receipt_not_pending: x'), { action: 'reject' })).toBe(true);
+      expect(isAlreadyProcessed(new ApiError(409, 'receipt_not_pending: x'), { action: 'reject' })).toBe(false);
+      expect(isAlreadyProcessed(new ApiError(409, 'precondition_failed: x'), { action: 'approve' })).toBe(false);
+      expect(isAlreadyProcessed(new ApiError(409, ': no code'), { action: 'approve' })).toBe(true);
     });
   });
 
@@ -225,6 +227,14 @@ describe('compat', () => {
       expect(describeResolveError(new ApiError(404, 'intent_not_found: x')).title).toBe('Intent not found');
       expect(describeResolveError(new ApiError(400, 'invalid_body: bad note')).message).toContain('bad note');
       expect(describeResolveError(new ApiError(0, 'network_error: down')).title).toMatch(/unreachable/i);
+    });
+
+    it('unknown 409 returns Conflict with server message', () => {
+      const out = describeResolveError(
+        new ApiError(409, 'duplicate_intent: intent x exists', { code: 'duplicate_intent', detail: 'intent x exists' }),
+      );
+      expect(out.title).toBe('Conflict');
+      expect(out.message).toBe('intent x exists');
     });
   });
 });

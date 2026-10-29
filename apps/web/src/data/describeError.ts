@@ -1,5 +1,12 @@
 import { ApiError, apiErrorCode } from './apiError';
-import { isAlreadyProcessed, parseRace409, race409Message, type AlreadyProcessedOptions, type Race409Code } from './compat';
+import {
+  conflict409ServerMessage,
+  isAlreadyProcessed,
+  parseRace409,
+  race409Message,
+  type AlreadyProcessedOptions,
+  type Race409Code,
+} from './compat';
 
 export type DescribedErrorKind =
   | 'network'
@@ -7,6 +14,7 @@ export type DescribedErrorKind =
   | 'server'
   | 'rail_mismatch'
   | 'already_processed'
+  | 'conflict'
   | 'unknown';
 
 export type DescribeErrorContext = AlreadyProcessedOptions;
@@ -77,6 +85,18 @@ export function describeError(err: unknown, context: DescribeErrorContext = {}):
         message: detail || err.message,
         hint: 'The API failed — retry or check server logs.',
         retryable: true,
+      };
+    }
+    if (err.status === 409) {
+      const conflictCode = apiErrorCode(err) ?? 'conflict';
+      return {
+        kind: 'conflict',
+        status: 409,
+        code: conflictCode,
+        title: 'Conflict',
+        message: conflict409ServerMessage(err),
+        hint: 'Showing the latest ledger state.',
+        retryable: false,
       };
     }
     if (err.status >= 400) {

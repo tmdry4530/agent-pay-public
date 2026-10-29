@@ -8,6 +8,8 @@
 //   LEDGER_PATH=/tmp/agent-pay-demo/ledger.json npm run demo:seed-needs-check
 import { isAbsolute, resolve } from 'node:path';
 import { Ledger, runPayment } from '../../../packages/core/src/index.ts';
+// Loaded via Node 24's built-in TypeScript type stripping (policy-defaults.ts has only `import type`).
+import { DEFAULT_POLICY } from '../../api/src/policy-defaults.ts';
 
 const raw = process.env.LEDGER_PATH;
 if (!raw) {
@@ -18,15 +20,8 @@ const filePath = isAbsolute(raw) ? raw : resolve(process.env.INIT_CWD ?? process
 const rail = process.env.RAIL || 'mock';
 const STALE_MS = 2 * 60_000;
 
-// Mirrors the API's DEFAULT_POLICY (apps/api/src/app.ts) for the mock rail.
-const policy = {
-  agentId: 'demo-agent',
-  perTxMax: 100,
-  dailyMax: 200,
-  allowedPayees: ['openai-api', 'anthropic-api', 'vercel', 'near-compute'],
-  requireApprovalAbove: 50,
-  currency: 'USD',
-};
+// The API's own DEFAULT_POLICY (side-effect-free module), so the seed cannot drift from the server.
+const policy = DEFAULT_POLICY;
 const stamp = Date.now().toString(36);
 
 const ledger = new Ledger({ filePath });

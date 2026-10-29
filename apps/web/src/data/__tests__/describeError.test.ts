@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../apiError';
-import { RACE_409_CODES } from '../compat';
+import { isAlreadyProcessed, RACE_409_CODES } from '../compat';
 import { describeError } from '../describeError';
 
 describe('describeError', () => {
@@ -11,11 +11,13 @@ describe('describeError', () => {
     expect(d.title).toMatch(/unreachable/i);
   });
 
-  it('classifies 4xx client errors', () => {
+  it('classifies non-race 409 as conflict', () => {
     const d = describeError(new ApiError(409, 'receipt_not_pending: not pending'));
-    expect(d.kind).toBe('client');
+    expect(d.kind).toBe('conflict');
     expect(d.code).toBe('receipt_not_pending');
     expect(d.retryable).toBe(false);
+    expect(d.title).toBe('Conflict');
+    expect(d.message).toBe('not pending');
   });
 
   it('classifies 5xx as retryable', () => {
@@ -36,6 +38,66 @@ describe('describeError', () => {
     const d = describeError(new ApiError(409, 'rail_mismatch: wrong rail'));
     expect(d.kind).toBe('rail_mismatch');
     expect(d.retryable).toBe(false);
+  });
+
+  describe('409 conflict (non-race)', () => {
+    it('in_progress on approve without race context is conflict with specific title only via race path', () => {
+      const race = describeError(new ApiError(409, 'in_progress: paying', { code: 'in_progress', detail: 'paying' }), {
+        action: 'approve',
+      });
+      expect(race.kind).toBe('already_processed');
+      expect(race.title).toBe('Payment in progress');
+    });
+
+    it('precondition_failed with {code, detail} => conflict with server message verbatim', () => {
+      const d = describeError(
+        new ApiError(409, 'precondition_failed: ignored', {
+          code: 'precondition_failed',
+          detail: 'policy changed since quote',
+        }),
+      );
+      expect(d.kind).toBe('conflict');
+      expect(d.title).toBe('Conflict');
+      expect(d.message).toBe('policy changed since quote');
+      expect(d.hint).toBe('Showing the latest ledger state.');
+      expect(d.code).toBe('precondition_failed');
+    });
+
+    it('duplicate_intent legacy message => conflict with detail after colon', () => {
+      const d = describeError(new ApiError(409, 'duplicate_intent: intent x exists'));
+      expect(d.kind).toBe('conflict');
+      expect(d.message).toBe('intent x exists');
+    });
+
+    it('unknown code with empty message => fallback text', () => {
+      const d = describeError(new ApiError(409, 'weird_new_code:', { code: 'weird_new_code', detail: '' }));
+      expect(d.kind).toBe('conflict');
+      expect(d.message).toBe('The server reported a conflict with the current state. Showing the latest ledger.');
+    });
+
+    it('bare code with no message (legacy {error:"duplicate_intent"}) => fallback, code kept', () => {
+      const d = describeError(new ApiError(409, 'duplicate_intent'));
+      expect(d.kind).toBe('conflict');
+      expect(d.code).toBe('duplicate_intent');
+      expect(d.message).toBe('The server reported a conflict with the current state. Showing the latest ledger.');
+    });
+
+    it('409 on approve with unknown code is NOT already_processed', () => {
+      const err = new ApiError(409, 'precondition_failed: stale', { code: 'precondition_failed', detail: 'stale' });
+      expect(isAlreadyProcessed(err, { action: 'approve' })).toBe(false);
+      const d = describeError(err, { action: 'approve' });
+      expect(d.kind).toBe('conflict');
+    });
+
+    it('returns HTML in message verbatim', () => {
+      const d = describeError(
+        new ApiError(409, 'precondition_failed: x', {
+          code: 'precondition_failed',
+          detail: '<b>x</b>',
+        }),
+      );
+      expect(d.message).toBe('<b>x</b>');
+    });
   });
 
   describe('already_processed race409 codes', () => {
