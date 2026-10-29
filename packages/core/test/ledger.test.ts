@@ -125,8 +125,11 @@ test('daily totals split at the UTC day boundary; default day uses injected cloc
   let nowIso = '2026-10-28T23:59:59.000Z';
   const ledger = new Ledger({ filePath, now: () => new Date(nowIso) });
 
+  // Totals bucket by the ledger's server clock at approval (F2), so set it per record.
   await recordPaid(ledger, intent({ id: 'late', amount: 30, createdAt: '2026-10-28T23:59:59.000Z' }));
+  nowIso = '2026-10-29T00:00:01.000Z';
   await recordPaid(ledger, intent({ id: 'early', amount: 7, createdAt: '2026-10-29T00:00:01.000Z' }));
+  nowIso = '2026-10-28T12:00:00.000Z';
   await recordPaid(ledger, intent({ id: 'other-agent', agentId: 'agent-2', amount: 99, createdAt: '2026-10-28T12:00:00.000Z' }));
 
   assert.equal(await ledger.dailyTotal('agent-1'), 30); // clock = Oct 28 UTC
