@@ -109,8 +109,14 @@ export function parsePolicy(body: unknown): Policy {
   const payees = o.allowedPayees;
   if (!Array.isArray(payees) || payees.length > 1000) throw bad('"allowedPayees" must be an array (max 1000)');
   const allowedPayees = payees.map((p, i) => {
-    if (typeof p !== 'string' || p.trim() === '' || p.length > 256) {
+    if (typeof p !== 'string') {
       throw bad(`"allowedPayees[${i}]" must be a non-empty string (max 256)`);
+    }
+    if (p.length > 256) {
+      throw bad(`"allowedPayees[${i}]" must be a non-empty string (max 256)`);
+    }
+    if (p.trim() === '') {
+      throw new ValidationError('invalid_policy', `allowedPayees[${i}] is empty`);
     }
     return p;
   });
