@@ -119,7 +119,7 @@ instead of paying twice.
 ### Scene 7 — Intents & manual resolve (2:10–2:30, 20 s)
 
 **On screen:** Highlight the Intents panel. The entry "Buy API credits (rail error) · $12.00" shows the chip "Needs
-check (pending) · Rail error"; "Spent today $119.00" still counts it. Click its **Resolve…** button. The Decision
+check (pending) · Unknown outcome"; "Spent today $119.00" still counts it. Click its **Resolve…** button. The Decision
 card shows Payment outcome badge "NEEDS CHECK (PENDING)", and the Receipt card the "Needs check (pending)" banner ("…
 The amount stays reserved and is not marked failed. … Do not retry the payment."). In the "Resolve payment" form:
 Outcome **Failed**, Note "No charge on the rail dashboard", Resolved by `ops-bob` → **Record outcome**. Screen

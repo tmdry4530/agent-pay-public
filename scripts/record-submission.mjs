@@ -1,31 +1,43 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const demoScript = path.join(repoRoot, 'scripts', 'demo.mjs');
 const videoScriptPath = path.join(repoRoot, 'docs', 'submission', 'video-script.md');
+const seedScript = path.join(repoRoot, 'apps', 'web', 'scripts', 'seed-needs-check.mjs');
+const viteBin = path.join(repoRoot, 'apps', 'web', 'node_modules', 'vite', 'bin', 'vite.js');
+const ENV_FILE = path.join(repoRoot, '.env');
+const envFileArgs = fs.existsSync(ENV_FILE) ? [`--env-file=${ENV_FILE}`] : [];
 
 const DEFAULT_API = 'http://127.0.0.1:8787';
-const TOTAL_SECONDS = 170;
+const API_HOST = '127.0.0.1';
+const API_PORT = Number(process.env.DEMO_API_PORT) || 8787;
+const WEB_PORT = Number(process.env.DEMO_WEB_PORT) || 5173;
+const ROLES = ['intro', 'paid', 'rejected', 'approval', 'approved', 'ledger', 'resolve', 'cli'];
+const MAX_TOTAL_SECONDS = 175;
 const WEB_ZOOM = Number(process.env.WEB_ZOOM ?? '0.8');
 const SECRET_RE = /(secret|api[_-]?key|token\b|password|Bearer )/i;
 
 /** @type {import('playwright').ChromiumBrowser | null} */
 let browser = null;
 /** @type {import('node:child_process').ChildProcess | null} */
-let demoChild = null;
+let apiChild = null;
+/** @type {import('node:child_process').ChildProcess | null} */
+let webChild = null;
 
 const pageErrors = [];
 const consoleErrors = [];
 /** @type {ReturnType<typeof setTimeout>[]} */
 const captionTimers = [];
-/** @type {{ tag: string; testId: string; elTop: number; elBottom: number; captionTop: number; captionBottom: number; overlap: boolean; fullyVisible: boolean }[]} */
+/** @type {Record<string, unknown>[]} */
 const captionOverlapChecks = [];
+/** @type {{ tag: string; expected: string; actual: string }[]} */
+const spentChecks = [];
 
 let t0 = 0;
 let signalExitCode = null;
@@ -61,79 +73,205 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-async function stopDemoRunner() {
-  if (!demoChild?.pid) return;
-  try {
-    process.kill(-demoChild.pid, 'SIGINT');
-  } catch (err) {
-    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'ESRCH') throw err;
-  }
-  await waitForExit(demoChild, 10_000);
-  if (demoChild.exitCode === null && demoChild.signalCode === null) {
+function prefixLines(stream, prefix) {
+  if (!stream) return;
+  let buffer = '';
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk) => {
+    buffer += chunk;
+    const parts = buffer.split('\n');
+    buffer = parts.pop() ?? '';
+    for (const line of parts) {
+      console.log(`${prefix}${line}`);
+    }
+  });
+  stream.on('end', () => {
+    if (buffer.length) console.log(`${prefix}${buffer}`);
+  });
+}
+
+function checkPortFree(port, label) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        reject(
+          new Error(
+            `port ${port} (${label}) is already in use on ${API_HOST} — stop the other process or set DEMO_API_PORT/DEMO_WEB_PORT`,
+          ),
+        );
+      } else {
+        reject(err);
+      }
+    });
+    server.listen(port, API_HOST, () => {
+      server.close((closeErr) => {
+        if (closeErr) reject(closeErr);
+        else resolve();
+      });
+    });
+  });
+}
+
+function runSeed(ledgerPath) {
+  return new Promise((resolve, reject) => {
+    /** @type {Buffer[]} */
+    const outChunks = [];
+    /** @type {Buffer[]} */
+    const errChunks = [];
+    const child = spawn(process.execPath, [seedScript], {
+      cwd: repoRoot,
+      env: { ...process.env, LEDGER_PATH: ledgerPath, RAIL: 'mock' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout.on('data', (c) => {
+      outChunks.push(c);
+      for (const line of c.toString('utf8').split('\n').filter(Boolean)) {
+        console.log(`[seed] ${line}`);
+      }
+    });
+    child.stderr.on('data', (c) => {
+      errChunks.push(c);
+      for (const line of c.toString('utf8').split('\n').filter(Boolean)) {
+        console.log(`[seed] ${line}`);
+      }
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      const stdout = Buffer.concat(outChunks).toString('utf8');
+      const stderr = Buffer.concat(errChunks).toString('utf8');
+      const combined = `${stdout}\n${stderr}`.trim();
+      if (code !== 0) {
+        reject(new Error(`seed-needs-check exited with code ${code}:\n${combined}`));
+        return;
+      }
+      if (!stdout.includes('needsManualResolve=true') || !stdout.includes('submitting')) {
+        reject(
+          new Error(
+            `seed-needs-check stdout missing expected markers (needsManualResolve=true, submitting):\n${combined}`,
+          ),
+        );
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+async function startServers(ledgerPath) {
+  await checkPortFree(API_PORT, 'api');
+  await checkPortFree(WEB_PORT, 'web');
+
+  const apiUrl = `http://${API_HOST}:${API_PORT}`;
+  const webUrl = `http://${API_HOST}:${WEB_PORT}/`;
+
+  apiChild = spawn(
+    process.execPath,
+    [...envFileArgs, path.join('apps', 'api', 'src', 'main.ts')],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        RAIL: 'mock',
+        LEDGER_PATH: ledgerPath,
+        PORT: String(API_PORT),
+        HOST: API_HOST,
+      },
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  prefixLines(apiChild.stdout, '[api] ');
+  prefixLines(apiChild.stderr, '[api] ');
+
+  const healthDeadline = Date.now() + 15_000;
+  let apiReady = false;
+  while (Date.now() < healthDeadline) {
+    if (apiChild.exitCode !== null || apiChild.signalCode !== null) {
+      throw new Error('API process exited before health check succeeded');
+    }
     try {
-      process.kill(-demoChild.pid, 'SIGKILL');
+      const res = await fetch(`${apiUrl}/health`);
+      if (res.ok) {
+        const body = await res.json();
+        if (body?.ok === true) {
+          if (body.rail !== 'mock') {
+            throw new Error(
+              `API health rail must be "mock" for submission recording (got ${JSON.stringify(body.rail)})`,
+            );
+          }
+          apiReady = true;
+          break;
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('rail must be')) throw err;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  if (!apiReady) {
+    throw new Error('API health check timed out after 15s (expected { ok: true, rail: "mock" })');
+  }
+
+  webChild = spawn(process.execPath, [viteBin, '--host', API_HOST, '--port', String(WEB_PORT), '--strictPort'], {
+    cwd: path.join(repoRoot, 'apps', 'web'),
+    env: {
+      ...process.env,
+      VITE_API_BASE: apiUrl,
+    },
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  prefixLines(webChild.stdout, '[web] ');
+  prefixLines(webChild.stderr, '[web] ');
+
+  const webDeadline = Date.now() + 30_000;
+  let webReady = false;
+  while (Date.now() < webDeadline) {
+    if (webChild.exitCode !== null || webChild.signalCode !== null) {
+      throw new Error('web process exited before HTTP 200');
+    }
+    try {
+      const res = await fetch(webUrl);
+      if (res.status === 200) {
+        webReady = true;
+        break;
+      }
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  if (!webReady) {
+    throw new Error('web server did not respond with HTTP 200 within 30s');
+  }
+
+  console.log(
+    `[record] api pid ${apiChild.pid ?? '—'} web pid ${webChild.pid ?? '—'} ledger ${ledgerPath}`,
+  );
+
+  return { webUrl, apiUrl };
+}
+
+async function stopServers() {
+  for (const child of [apiChild, webChild]) {
+    if (!child?.pid) continue;
+    try {
+      process.kill(-child.pid, 'SIGTERM');
     } catch (err) {
       if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'ESRCH') throw err;
     }
-  }
-}
-
-function startDemoRunner() {
-  return new Promise((resolve, reject) => {
-    const readyRe =
-      /agent-pay demo ready:\s*(https?:\/\/[^\s]+)\s+\(api\s+(https?:\/\/[^,\s]+)/;
-    const deadline = Date.now() + 60_000;
-    let settled = false;
-
-    const finish = (fn, value) => {
-      if (settled) return;
-      settled = true;
-      clearInterval(timer);
-      fn(value);
-    };
-
-    demoChild = spawn(process.execPath, [demoScript], {
-      cwd: repoRoot,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
-    });
-
-    const handleStream = (stream) => {
-      if (!stream) return;
-      let buffer = '';
-      stream.setEncoding('utf8');
-      stream.on('data', (chunk) => {
-        buffer += chunk;
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          console.log(`[demo] ${line}`);
-          const m = line.match(readyRe);
-          if (m) finish(resolve, { webUrl: m[1], apiUrl: m[2] });
-        }
-      });
-    };
-
-    handleStream(demoChild.stdout);
-    handleStream(demoChild.stderr);
-
-    demoChild.on('error', (err) => finish(reject, err));
-    demoChild.on('exit', (code, signal) => {
-      finish(
-        reject,
-        new Error(
-          `demo runner exited before ready (${signal != null ? `signal ${signal}` : `code ${code}`})`,
-        ),
-      );
-    });
-
-    const timer = setInterval(() => {
-      if (Date.now() >= deadline) {
-        finish(reject, new Error('timed out waiting for demo ready line (60s)'));
+    await waitForExit(child, 4000);
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'ESRCH') throw err;
       }
-    }, 500);
-  });
+    }
+  }
+  apiChild = null;
+  webChild = null;
 }
 
 function parseTime(m, s) {
@@ -182,6 +320,56 @@ function buildCaptionChunks(narration, sceneDurationSec, maxWords = 22) {
     offset += duration;
     return chunk;
   });
+}
+
+function parseTimingRange(range) {
+  const m = String(range)
+    .trim()
+    .match(/^(\d+):(\d+)[–-](\d+):(\d+)$/);
+  if (!m) {
+    throw new Error(`video-script.md: invalid timing range "${range}"`);
+  }
+  return {
+    start: parseTime(m[1], m[2]),
+    end: parseTime(m[3], m[4]),
+  };
+}
+
+function validateTimingTable(markdown, scenes, totalSeconds) {
+  const timingMatch = markdown.match(/## Timing\b[\s\S]*?(?=\n## [^\n]+|\n### Scene \d+ —|$)/);
+  if (!timingMatch) return;
+
+  const block = timingMatch[0];
+  const rowRe = /^\|\s*S(\d+)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*(\d+)\s*s\s*\|\s*$/gm;
+  let rowMatch;
+  while ((rowMatch = rowRe.exec(block)) !== null) {
+    const num = Number(rowMatch[1]);
+    const range = rowMatch[3].trim();
+    const duration = Number(rowMatch[4]);
+    const scene = scenes.find((s) => s.num === num);
+    if (!scene) {
+      throw new Error(`video-script.md: Timing table references unknown S${num}`);
+    }
+    const { start, end } = parseTimingRange(range);
+    if (start !== scene.start || end !== scene.end || duration !== scene.duration) {
+      throw new Error(
+        `video-script.md: Timing row S${num} disagrees with scene heading (table ${start}–${end}, ${duration}s vs heading ${scene.start}–${scene.end}, ${scene.duration}s)`,
+      );
+    }
+  }
+
+  const totalRow = block.match(
+    /^\|\s*\|\s*\*\*Total\*\*\s*\|\s*\*\*([^*]+)\*\*\s*\|\s*\*\*(\d+)\s*s\*\*\s*\|\s*$/m,
+  );
+  if (totalRow) {
+    const { start, end } = parseTimingRange(totalRow[1].trim());
+    const tableTotal = Number(totalRow[2]);
+    if (start !== 0 || end !== totalSeconds || tableTotal !== totalSeconds) {
+      throw new Error(
+        `video-script.md: Timing Total row disagrees with derived total (table 0:00–${end}, ${tableTotal}s vs ${totalSeconds}s)`,
+      );
+    }
+  }
 }
 
 function parseVideoScript(markdown) {
@@ -233,21 +421,18 @@ function parseVideoScript(markdown) {
 
   scenes.sort((a, b) => a.num - b.num);
 
-  if (scenes.length !== 7) {
-    throw new Error(`video-script.md: expected 7 scenes, found ${scenes.length}`);
+  if (scenes.length !== ROLES.length) {
+    throw new Error(
+      `video-script.md: expected ${ROLES.length} scenes, found ${scenes.length}`,
+    );
   }
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < ROLES.length; i++) {
     if (scenes[i].num !== i + 1) {
       throw new Error(`video-script.md: expected Scene ${i + 1}, got Scene ${scenes[i].num}`);
     }
   }
   if (scenes[0].start !== 0) {
     throw new Error(`video-script.md: Scene 1 must start at 0:00 (got ${scenes[0].start}s)`);
-  }
-  if (scenes[6].end !== TOTAL_SECONDS) {
-    throw new Error(
-      `video-script.md: Scene 7 must end at 2:50 / ${TOTAL_SECONDS}s (got ${scenes[6].end}s)`,
-    );
   }
   for (let i = 0; i < scenes.length - 1; i++) {
     if (scenes[i].end !== scenes[i + 1].start) {
@@ -257,10 +442,34 @@ function parseVideoScript(markdown) {
     }
   }
 
-  return scenes.map((s) => ({
+  const totalSeconds = scenes[scenes.length - 1].end;
+  if (totalSeconds > MAX_TOTAL_SECONDS) {
+    throw new Error(
+      `video-script.md: total ${totalSeconds}s exceeds limit ${MAX_TOTAL_SECONDS}s (2:55)`,
+    );
+  }
+
+  validateTimingTable(markdown, scenes, totalSeconds);
+
+  if (!/intent|resolve/i.test(scenes[6].title)) {
+    throw new Error(
+      `video-script.md: Scene 7 title must mention intent or resolve (got "${scenes[6].title}")`,
+    );
+  }
+  if (!/\bCLI\b/i.test(scenes[7].title)) {
+    throw new Error(
+      `video-script.md: Scene 8 title must mention CLI (got "${scenes[7].title}")`,
+    );
+  }
+
+  const enriched = scenes.map((s, i) => ({
     ...s,
+    role: ROLES[i],
+    id: `S${s.num}`,
     captionChunks: buildCaptionChunks(s.narration, s.duration),
   }));
+
+  return { scenes: enriched, totalSeconds };
 }
 
 function until(sec) {
@@ -355,37 +564,186 @@ async function scrollForGaugeHighlight(page) {
   });
 }
 
-async function scrollAboveCaption(page, testId) {
-  await page.evaluate((id) => {
-    const el = document.querySelector(`[data-testid="${id}"]`);
-    if (!el) return;
-    const box = document.querySelector('#submission-caption .submission-caption__box');
-    const captionTop = box
-      ? box.getBoundingClientRect().top
-      : window.innerHeight - 140;
-    const gap = 24; // a little above the 16px assert gap: the caption box can grow by a line mid-scene
-    const minTop = 8;
-    const targetBottom = captionTop - gap;
-    const rect = el.getBoundingClientRect();
-    if (rect.bottom > targetBottom) {
-      const scrollDown = rect.bottom - targetBottom;
-      const topAfter = rect.top - scrollDown;
-      if (topAfter < minTop) {
-        window.scrollBy({ top: rect.top - minTop, behavior: 'instant' });
-      } else {
-        window.scrollBy({ top: scrollDown, behavior: 'instant' });
+async function scrollAboveCaptionSel(page, selector) {
+  await page.evaluate(
+    ({ sel, gap, minTop }) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const box = document.querySelector('#submission-caption .submission-caption__box');
+      const captionTop = box
+        ? box.getBoundingClientRect().top
+        : window.innerHeight - 140;
+      const targetBottom = captionTop - gap;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom > targetBottom) {
+        const scrollDown = rect.bottom - targetBottom;
+        const topAfter = rect.top - scrollDown;
+        const want = topAfter < minTop ? rect.top - minTop : scrollDown;
+        const root = document.scrollingElement || document.documentElement;
+        const maxScroll = root.scrollHeight - window.innerHeight - window.scrollY;
+        if (want > maxScroll) {
+          let spacer = document.getElementById('record-scroll-spacer');
+          if (!spacer) {
+            spacer = document.createElement('div');
+            spacer.id = 'record-scroll-spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(spacer);
+          }
+          const cur = Number.parseFloat(spacer.style.height || '0') || 0;
+          const zoom = Number.parseFloat(document.documentElement.style.zoom || '1') || 1;
+          spacer.style.height = `${Math.ceil(cur + (want - maxScroll) / zoom + 40)}px`;
+        }
+        window.scrollBy({ top: want, behavior: 'instant' });
       }
-    }
-  }, testId);
+    },
+    { sel: selector, gap: 24, minTop: 8 },
+  );
   await pause(page, 400);
+}
+
+async function scrollIntoViewAboveCaptionSel(page, selector, { gap = 16, minTop = 8 } = {}) {
+  await page.evaluate(
+    ({ sel, gap, minTop }) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+      const box = document.querySelector('#submission-caption .submission-caption__box');
+      const captionTop = box ? box.getBoundingClientRect().top : window.innerHeight - 140;
+      const targetBottom = captionTop - gap;
+
+      const scrollUpIfNeeded = () => {
+        const rect = el.getBoundingClientRect();
+        if (rect.top < minTop) {
+          window.scrollBy({ top: rect.top - minTop, behavior: 'instant' });
+        }
+      };
+
+      scrollUpIfNeeded();
+
+      let rect = el.getBoundingClientRect();
+      if (rect.bottom > targetBottom) {
+        const scrollDown = rect.bottom - targetBottom;
+        const topAfter = rect.top - scrollDown;
+        const want = topAfter < minTop ? rect.top - minTop : scrollDown;
+        const root = document.scrollingElement || document.documentElement;
+        const maxScroll = root.scrollHeight - window.innerHeight - window.scrollY;
+        if (want > maxScroll) {
+          let spacer = document.getElementById('record-scroll-spacer');
+          if (!spacer) {
+            spacer = document.createElement('div');
+            spacer.id = 'record-scroll-spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(spacer);
+          }
+          const cur = Number.parseFloat(spacer.style.height || '0') || 0;
+          const zoom = Number.parseFloat(document.documentElement.style.zoom || '1') || 1;
+          spacer.style.height = `${Math.ceil(cur + (want - maxScroll) / zoom + 40)}px`;
+        }
+        window.scrollBy({ top: want, behavior: 'instant' });
+      }
+
+      scrollUpIfNeeded();
+    },
+    { sel: selector, gap, minTop },
+  );
+  await pause(page, 400);
+}
+
+/** The app smooth-scrolls the stepper into view when the step changes; wait for that to finish. */
+async function waitScrollSettled(page, { stableMs = 300, maxMs = 3000 } = {}) {
+  const t0 = Date.now();
+  let last = await page.evaluate(() => window.scrollY);
+  let stableSince = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    await page.waitForTimeout(100);
+    const y = await page.evaluate(() => window.scrollY);
+    if (y !== last) {
+      last = y;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= stableMs) {
+      return;
+    }
+  }
+}
+
+async function scrollAboveCaption(page, testId) {
+  await scrollAboveCaptionSel(page, `[data-testid="${testId}"]`);
 }
 
 const FULL = { requireFullyVisible: true };
 
-async function assertNotUnderCaption(page, testId, tag, { requireFullyVisible = false } = {}) {
+function captionCheckFails(c) {
+  if (c.kind === 'intents-panel') return Boolean(c.overlap);
+  return Boolean(c.overlap || (c.requireFullyVisible && !c.fullyVisible));
+}
+
+async function assertCaptionClearOfIntents(page, tag) {
+  const result = await page.evaluate(() => {
+    const box = document.querySelector('#submission-caption .submission-caption__box');
+    const root = document.getElementById('submission-caption');
+    if (!box || !root) return null;
+    const rootStyle = getComputedStyle(root);
+    if (rootStyle.display === 'none' || rootStyle.visibility === 'hidden') return null;
+    const captionRect = box.getBoundingClientRect();
+    if (captionRect.width <= 0 || captionRect.height <= 0) return null;
+
+    let panel = document.querySelector('[data-testid="intent-flows"]');
+    panel = panel?.closest('.panel') ?? panel;
+    if (!panel) {
+      for (const candidate of document.querySelectorAll('.sidebar .panel')) {
+        const heading = candidate.querySelector('h2, h3, .panel__title');
+        const label = heading?.textContent ?? candidate.textContent ?? '';
+        if (/\bIntents\b/i.test(label.slice(0, 80))) {
+          panel = candidate;
+          break;
+        }
+      }
+    }
+    if (!panel) return null;
+
+    const panelRect = panel.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const clip = (r) => ({
+      left: Math.max(0, r.left),
+      top: Math.max(0, r.top),
+      right: Math.min(vw, r.right),
+      bottom: Math.min(vh, r.bottom),
+    });
+    const c = clip(captionRect);
+    const p = clip(panelRect);
+    if (c.right <= c.left || c.bottom <= c.top) return null;
+    if (p.right <= p.left || p.bottom <= p.top) return null;
+    const overlap = !(c.right <= p.left || c.left >= p.right || c.bottom <= p.top || c.top >= p.bottom);
+    return {
+      overlap,
+      captionRect: { left: c.left, top: c.top, right: c.right, bottom: c.bottom },
+      panelRect: { left: p.left, top: p.top, right: p.right, bottom: p.bottom },
+    };
+  });
+
+  if (!result) return;
+
+  const check = {
+    tag: `${tag}-intents-panel`,
+    kind: 'intents-panel',
+    overlap: result.overlap,
+    captionRect: result.captionRect,
+    panelRect: result.panelRect,
+  };
+  captionOverlapChecks.push(check);
+  if (check.overlap) {
+    const cr = check.captionRect;
+    const pr = check.panelRect;
+    throw new Error(
+      `${tag} caption overlaps Intents panel: caption ${cr.left.toFixed(0)}–${cr.right.toFixed(0)}×${cr.top.toFixed(0)}–${cr.bottom.toFixed(0)} vs panel ${pr.left.toFixed(0)}–${pr.right.toFixed(0)}×${pr.top.toFixed(0)}–${pr.bottom.toFixed(0)}`,
+    );
+  }
+}
+
+async function assertSelNotUnderCaption(page, selector, tag, { requireFullyVisible = false } = {}) {
   const metrics = await page.evaluate(
-    ({ id }) => {
-      const el = document.querySelector(`[data-testid="${id}"]`);
+    ({ sel }) => {
+      const el = document.querySelector(sel);
       const box = document.querySelector('#submission-caption .submission-caption__box');
       let captionTop;
       let captionBottom;
@@ -408,29 +766,86 @@ async function assertNotUnderCaption(page, testId, tag, { requireFullyVisible = 
       const overlap = elBottom > captionTop && elTop < captionBottom;
       const fullyVisible =
         el != null && elTop >= 0 && elBottom <= captionTop - gap;
-      return { testId: id, elTop, elBottom, captionTop, captionBottom, overlap, fullyVisible };
+      const testId = el?.getAttribute('data-testid') ?? sel;
+      return { testId, elTop, elBottom, captionTop, captionBottom, overlap, fullyVisible };
     },
-    { id: testId },
+    { sel: selector },
   );
-  const check = { tag, requireFullyVisible, ...metrics };
+  const check = { tag, selector, requireFullyVisible, ...metrics };
   captionOverlapChecks.push(check);
   if (requireFullyVisible && !check.fullyVisible) {
     throw new Error(
-      `${tag} [data-testid=${testId}] not fully visible above caption: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption top ${check.captionTop.toFixed(1)} (needs ${16}px gap)`,
+      `${tag} ${selector} not fully visible above caption: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption top ${check.captionTop.toFixed(1)} (needs ${16}px gap)`,
     );
   }
   if (check.overlap || check.elTop < 0) {
     throw new Error(
-      `caption overlaps ${tag} [data-testid=${testId}]: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption ${check.captionTop.toFixed(1)}–${check.captionBottom.toFixed(1)}` +
+      `caption overlaps ${tag} ${selector}: element ${check.elTop.toFixed(1)}–${check.elBottom.toFixed(1)} vs caption ${check.captionTop.toFixed(1)}–${check.captionBottom.toFixed(1)}` +
         (check.elTop < 0 ? ' (partially scrolled off top)' : ''),
     );
   }
+  await assertCaptionClearOfIntents(page, tag);
   return check;
+}
+
+async function assertNotUnderCaption(page, testId, tag, opts) {
+  return assertSelNotUnderCaption(page, `[data-testid="${testId}"]`, tag, opts);
 }
 
 async function refocusAboveCaption(page, testId, tag, opts) {
   await scrollAboveCaption(page, testId);
   await assertNotUnderCaption(page, testId, tag, opts);
+}
+
+async function markIntentFlow(page, purpose, markId) {
+  await page.evaluate(
+    ({ purpose, markId }) => {
+      const items = document.querySelectorAll('[data-testid="intent-flow"]');
+      for (const li of items) {
+        const titleEl = li.querySelector('.intent-flow__title');
+        const title = titleEl?.textContent ?? '';
+        if (title.includes(purpose)) {
+          li.setAttribute('data-demo-id', markId);
+          return;
+        }
+      }
+      throw new Error(`intent-flow li not found for purpose containing: ${purpose}`);
+    },
+    { purpose, markId },
+  );
+}
+
+async function assertSpent(page, tag, expected) {
+  let actual = '';
+  try {
+    await page.waitForFunction(
+      ({ exp }) => {
+        const gauge = document.querySelector('[data-testid="gauge"]');
+        if (!gauge) return false;
+        return gauge.innerText.includes(`Spent today ${exp}`);
+      },
+      { exp: expected },
+      { timeout: 6000 },
+    );
+    actual =
+      (await page.evaluate(() => {
+        const gauge = document.querySelector('[data-testid="gauge"]');
+        const text = gauge?.innerText ?? '';
+        const m = text.match(/Spent today\s*(\$[\d,]+\.\d{2})/);
+        return m ? m[1] : text;
+      })) ?? '';
+  } catch {
+    actual =
+      (await page.evaluate(() => {
+        const gauge = document.querySelector('[data-testid="gauge"]');
+        const text = gauge?.innerText ?? '';
+        const m = text.match(/Spent today\s*(\$[\d,]+\.\d{2})/);
+        return m ? m[1] : text;
+      })) ?? '';
+    spentChecks.push({ tag, expected, actual });
+    throw new Error(`Spent today mismatch at ${tag}: expected ${expected}, got ${actual}`);
+  }
+  spentChecks.push({ tag, expected, actual });
 }
 
 function stripMarkdownBackticks(title) {
@@ -489,13 +904,44 @@ async function setCaption(page, sceneLabel, text) {
       }
       labelEl.textContent = label;
       textEl.textContent = body;
+
+      const sidebar = document.querySelector('.sidebar');
+      if (sidebar) {
+        const sidebarLeft = sidebar.getBoundingClientRect().left;
+        const leftEdge = 16;
+        const rightEdge = sidebarLeft - 16;
+        const center = (leftEdge + rightEdge) / 2;
+        const maxW = Math.max(120, sidebarLeft - 48);
+        root.style.left = `${center}px`;
+        root.style.transform = 'translateX(-50%)';
+        root.style.maxWidth = `${maxW}px`;
+
+        let boxRect = box.getBoundingClientRect();
+        const limitRight = sidebarLeft - 16;
+        if (boxRect.right > limitRight) {
+          const overflow = boxRect.right - limitRight;
+          const newCenter = center - overflow;
+          root.style.left = `${newCenter}px`;
+          boxRect = box.getBoundingClientRect();
+          if (boxRect.right > limitRight) {
+            root.style.maxWidth = `${Math.max(80, maxW - (boxRect.right - limitRight) - 8)}px`;
+          }
+        }
+        if (box.getBoundingClientRect().left < leftEdge) {
+          root.style.left = `${leftEdge + box.getBoundingClientRect().width / 2}px`;
+        }
+      } else {
+        root.style.left = '50%';
+        root.style.transform = 'translateX(-50%)';
+        root.style.maxWidth = '1100px';
+      }
     },
     { label: sceneLabel, body: text },
   );
 }
 
 function scheduleSceneCaptions(page, scene) {
-  const label = `Scene ${scene.num} · ${stripMarkdownBackticks(scene.title)}`;
+  const label = `${scene.id} · ${stripMarkdownBackticks(scene.title)}`;
   for (const chunk of scene.captionChunks) {
     const fireAt = t0 + (scene.start + chunk.startOffset) * 1000;
     const delay = Math.max(0, fireAt - Date.now());
@@ -540,21 +986,44 @@ async function clearHighlights(page) {
   });
 }
 
-async function highlight(page, testId) {
-  await page.evaluate((id) => {
+async function highlightSel(page, selector) {
+  await page.evaluate((sel) => {
     for (const el of document.querySelectorAll('[data-demo-hl]')) {
       el.style.outline = '';
       el.style.outlineOffset = '';
       el.style.borderRadius = '';
       el.removeAttribute('data-demo-hl');
     }
-    const el = document.querySelector(`[data-testid="${id}"]`);
+    const el = document.querySelector(sel);
     if (!el) return;
     el.style.outline = '3px solid #facc15';
     el.style.outlineOffset = '4px';
     el.style.borderRadius = '12px';
     el.setAttribute('data-demo-hl', '');
-  }, testId);
+  }, selector);
+}
+
+async function highlight(page, testId) {
+  await highlightSel(page, `[data-testid="${testId}"]`);
+}
+
+async function highlightIntentPanelAndItem(page, itemSelector) {
+  await page.evaluate((itemSel) => {
+    for (const el of document.querySelectorAll('[data-demo-hl]')) {
+      el.style.outline = '';
+      el.style.outlineOffset = '';
+      el.style.borderRadius = '';
+      el.removeAttribute('data-demo-hl');
+    }
+    for (const sel of ['[data-testid="intent-flows"]', itemSel]) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      el.style.outline = '3px solid #facc15';
+      el.style.outlineOffset = '4px';
+      el.style.borderRadius = '12px';
+      el.setAttribute('data-demo-hl', '');
+    }
+  }, itemSelector);
 }
 
 async function highlightSelector(page, selector) {
@@ -857,7 +1326,7 @@ async function handleSignalExit(code) {
     await browser.close().catch(() => {});
     browser = null;
   }
-  await stopDemoRunner();
+  await stopServers();
   process.exit(code);
 }
 
@@ -869,28 +1338,65 @@ process.on('SIGTERM', () => {
 });
 
 const markdown = fs.readFileSync(videoScriptPath, 'utf8');
-const scenes = parseVideoScript(markdown);
+const { scenes, totalSeconds: TOTAL_SECONDS } = parseVideoScript(markdown);
 
 if (process.env.PARSE_ONLY === '1') {
-  const report = scenes.map((s) => ({
-    num: s.num,
-    title: s.title,
-    start: s.start,
-    end: s.end,
-    narrationWordCount: wordCount(s.narration),
-    captionChunks: s.captionChunks,
-  }));
-  console.log(JSON.stringify(report, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        totalSeconds: TOTAL_SECONDS,
+        scenes: scenes.map((s) => ({
+          id: s.id,
+          num: s.num,
+          role: s.role,
+          title: s.title,
+          start: s.start,
+          end: s.end,
+          duration: s.duration,
+          narrationWordCount: wordCount(s.narration),
+          captionChunks: s.captionChunks,
+        })),
+      },
+      null,
+      2,
+    ),
+  );
   process.exit(0);
 }
 
 const playwright = await loadPlaywright();
 let exitCode = 0;
-/** @type {{ scene: number; title: string; plannedStart: number; plannedEnd: number; actualStart: number; actualEnd: number }[]} */
+/** @type {{ id: string; role: string; scene: number; title: string; plannedStart: number; plannedEnd: number; actualStart: number; actualEnd: number }[]} */
 const timingLog = [];
+/** @type {Record<string, string | undefined>} */
+const resolveTimingFields = {};
+let seedStdout = '';
+let ledgerPath = '';
 
 try {
-  const { webUrl, apiUrl } = await startDemoRunner();
+  ledgerPath = process.env.LEDGER_PATH ?? '';
+  if (!ledgerPath) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-pay-record-'));
+    ledgerPath = path.join(dir, 'ledger.json');
+  }
+  if (fs.existsSync(ledgerPath)) {
+    throw new Error(`LEDGER_PATH must be fresh (file already exists): ${ledgerPath}`);
+  }
+
+  seedStdout = await runSeed(ledgerPath);
+  const { webUrl, apiUrl } = await startServers(ledgerPath);
+
+  const ledgerRes = await fetch(`${apiUrl}/ledger`);
+  if (!ledgerRes.ok) {
+    throw new Error(`GET /ledger failed: ${ledgerRes.status}`);
+  }
+  const ledgerBody = await ledgerRes.json();
+  const purposes = (ledgerBody.entries ?? []).map((e) => e.intent?.purpose).filter(Boolean);
+  for (const need of ['Buy API credits (rail error)', 'Deploy preview (stuck)']) {
+    if (!purposes.some((p) => p === need || String(p).includes(need))) {
+      throw new Error(`GET /ledger missing seeded purpose "${need}" (got: ${purposes.join(', ')})`);
+    }
+  }
 
   const OUT =
     process.env.SUBMISSION_VIDEO ||
@@ -916,24 +1422,53 @@ try {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
   });
 
-  async function runScene(sceneNum, actions) {
-    const scene = scenes[sceneNum - 1];
+  async function runScene(role, actions) {
+    const scene = scenes.find((s) => s.role === role);
+    if (!scene) throw new Error(`no scene for role ${role}`);
     const actualStart = (Date.now() - t0) / 1000;
-    await actions(scene, () => scheduleSceneCaptions(page, scene));
+    const webScene = role !== 'cli';
+    /** @type {Promise<void> | null} */
+    let captionIntentsAfterSchedule = null;
+    await actions(scene, () => {
+      scheduleSceneCaptions(page, scene);
+      if (webScene) {
+        captionIntentsAfterSchedule = (async () => {
+          await pause(page, 1000);
+          await assertCaptionClearOfIntents(page, `${scene.id}-captions-on`);
+        })();
+        // Avoid an unhandled rejection while actions are still running; re-awaited below.
+        captionIntentsAfterSchedule.catch(() => {});
+      }
+    });
+    if (captionIntentsAfterSchedule) {
+      await captionIntentsAfterSchedule;
+    }
+    const actionsEndSec = (Date.now() - t0) / 1000;
+    if (actionsEndSec > scene.end) {
+      throw new Error(
+        `${scene.id} scene actions finished at ${actionsEndSec.toFixed(2)}s, past planned end ${scene.end}s`,
+      );
+    }
+    if (webScene) {
+      await assertCaptionClearOfIntents(page, `${scene.id}-scene-end`);
+    }
     await until(scene.end);
     const actualEnd = (Date.now() - t0) / 1000;
     timingLog.push({
+      id: scene.id,
+      role: scene.role,
       scene: scene.num,
       title: scene.title,
       plannedStart: scene.start,
       plannedEnd: scene.end,
       actualStart,
       actualEnd,
+      actionsEndSec,
     });
   }
 
   // Scene 1 — Intro
-  await runScene(1, async (_scene, scheduleCaptions) => {
+  await runScene('intro', async (_scene, scheduleCaptions) => {
     await page.goto(webUrl, { waitUntil: 'domcontentloaded' });
     await ensureWebCaptionPadding(page);
     scheduleCaptions();
@@ -945,10 +1480,11 @@ try {
     await clearHighlights(page);
     await highlight(page, 'gauge');
     await pause(page, 2000);
+    await assertSpent(page, 's1-end', '$32.00');
   });
 
   // Scene 2 — $12 paid
-  await runScene(2, async (_scene, scheduleCaptions) => {
+  await runScene('paid', async (_scene, scheduleCaptions) => {
     await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
@@ -971,10 +1507,11 @@ try {
     await pause(page, 2000);
     await assertNotUnderCaption(page, 'decision', 'scene2-decision-during-gauge-after-pause');
     await assertNotUnderCaption(page, 'receipt', 'scene2-receipt-during-gauge-after-pause', FULL);
+    await assertSpent(page, 's2-end', '$44.00');
   });
 
   // Scene 3 — rejected
-  await runScene(3, async (_scene, scheduleCaptions) => {
+  await runScene('rejected', async (_scene, scheduleCaptions) => {
     await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
@@ -989,10 +1526,11 @@ try {
     await assertNotUnderCaption(page, 'decision', 'scene3-decision-during-gauge');
     await pause(page, 2000);
     await assertNotUnderCaption(page, 'decision', 'scene3-decision-during-gauge-after-pause');
+    await assertSpent(page, 's3-end', '$44.00');
   });
 
   // Scene 4 — needs approval
-  await runScene(4, async (_scene, scheduleCaptions) => {
+  await runScene('approval', async (_scene, scheduleCaptions) => {
     await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
@@ -1007,10 +1545,11 @@ try {
     await scrollAboveCaption(page, 'btn-approve');
     await highlight(page, 'btn-approve');
     await pause(page, 2000);
+    await assertSpent(page, 's4-end', '$44.00');
   });
 
   // Scene 5 — approved
-  await runScene(5, async (_scene, scheduleCaptions) => {
+  await runScene('approved', async (_scene, scheduleCaptions) => {
     await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
@@ -1035,10 +1574,11 @@ try {
     await pause(page, 1500);
     await assertNotUnderCaption(page, 'decision', 'scene5-decision-during-gauge-after-pause');
     await assertNotUnderCaption(page, 'receipt', 'scene5-receipt-during-gauge-after-pause', FULL);
+    await assertSpent(page, 's5-end', '$119.00');
   });
 
   // Scene 6 — ledger zoom
-  await runScene(6, async (_scene, scheduleCaptions) => {
+  await runScene('ledger', async (_scene, scheduleCaptions) => {
     await ensureWebCaptionPadding(page);
     scheduleCaptions();
     await clearHighlights(page);
@@ -1053,8 +1593,124 @@ try {
     await clearHighlights(page);
   });
 
-  // Scene 7 — CLI
-  await runScene(7, async (scene, scheduleCaptions) => {
+  // Scene 7 — Intents & manual resolve
+  await runScene('resolve', async (_scene, scheduleCaptions) => {
+    await ensureWebCaptionPadding(page);
+    scheduleCaptions();
+    await clearHighlights(page);
+    await scrollToTop(page);
+
+    const intentSel = '[data-demo-id="needs-check"]';
+    await markIntentFlow(page, 'Buy API credits (rail error)', 'needs-check');
+    await scrollAboveCaptionSel(page, intentSel);
+    await highlightIntentPanelAndItem(page, intentSel);
+    await assertSelNotUnderCaption(page, intentSel, 's7-intent-needs-check', FULL);
+    resolveTimingFields.resolveChipBefore = await page.evaluate((sel) => {
+      const li = document.querySelector(sel);
+      return li?.querySelector('.intent-flow__chip')?.innerText?.trim() ?? '';
+    }, intentSel);
+    await assertSpent(page, 's7-start', '$119.00');
+    await pause(page, 2500);
+
+    await page
+      .getByRole('button', { name: 'Resolve Buy API credits (rail error)' })
+      .click();
+    await page.getByTestId('resolve-form').waitFor({ state: 'visible' });
+    await pause(page, 600);
+    await waitScrollSettled(page);
+
+    await scrollAboveCaption(page, 'decision');
+    resolveTimingFields.outcomeBadgeBefore = (
+      await page.getByTestId('result-status').innerText()
+    ).trim();
+    if (!/needs check/i.test(resolveTimingFields.outcomeBadgeBefore)) {
+      throw new Error(
+        `expected result-status needs check before resolve, got "${resolveTimingFields.outcomeBadgeBefore}"`,
+      );
+    }
+    await pause(page, 1500);
+
+    await scrollAboveCaption(page, 'resolve-form');
+    await highlight(page, 'resolve-form');
+    await assertNotUnderCaption(page, 'resolve-form', 's7-resolve-form', FULL);
+
+    await page.getByTestId('resolve-status-failed').click();
+    const noteEl = page.getByTestId('resolve-note');
+    await noteEl.click();
+    await noteEl.pressSequentially('No charge on the rail dashboard', { delay: 30 });
+    const byEl = page.getByTestId('resolve-by');
+    await byEl.click();
+    await byEl.fill('');
+    await byEl.pressSequentially('ops-bob', { delay: 40 });
+
+    await assertNotUnderCaption(page, 'resolve-form', 's7-resolve-form-filled', FULL);
+    const submitText = (await page.getByTestId('btn-resolve-submit').innerText()).trim();
+    if (submitText !== 'Record outcome') {
+      throw new Error(`resolve submit button text must be "Record outcome" (got "${submitText}")`);
+    }
+    await pause(page, 500);
+    await page.getByTestId('btn-resolve-submit').click();
+
+    const resolveErr = page.getByTestId('resolve-error');
+    if (await resolveErr.isVisible().catch(() => false)) {
+      throw new Error(await resolveErr.innerText());
+    }
+
+    await page.getByTestId('resolve-success').waitFor({ state: 'visible', timeout: 8000 });
+    const successText = (await page.getByTestId('resolve-success').innerText()).trim();
+    if (successText !== 'Resolved as failed by ops-bob.') {
+      throw new Error(`unexpected resolve-success text: "${successText}"`);
+    }
+    resolveTimingFields.resolveBanner = successText;
+    await waitScrollSettled(page);
+
+    await page.getByTestId('payment-outcome-text').waitFor({ state: 'visible' });
+    resolveTimingFields.resolveOutcome = (
+      await page.getByTestId('payment-outcome-text').innerText()
+    ).trim();
+    if (resolveTimingFields.resolveOutcome !== 'Payment failed — resolved by ops-bob') {
+      throw new Error(`unexpected payment-outcome-text: "${resolveTimingFields.resolveOutcome}"`);
+    }
+
+    resolveTimingFields.resolveBadge = (await page.getByTestId('result-status').innerText()).trim();
+    if (!/^failed$/i.test(resolveTimingFields.resolveBadge)) {
+      throw new Error(`expected result-status failed after resolve, got "${resolveTimingFields.resolveBadge}"`);
+    }
+
+    await scrollAboveCaption(page, 'resolve-success');
+    await assertNotUnderCaption(page, 'resolve-success', 's7-resolve-success', FULL);
+    await highlight(page, 'resolve-success');
+    await pause(page, 1500);
+
+    await scrollAboveCaption(page, 'payment-outcome');
+    await highlight(page, 'payment-outcome');
+    await assertNotUnderCaption(page, 'payment-outcome', 's7-payment-outcome', FULL);
+    await pause(page, 1500);
+
+    await markIntentFlow(page, 'Buy API credits (rail error)', 'needs-check');
+    const resolutionText = await page.evaluate((sel) => {
+      const li = document.querySelector(sel);
+      return li?.querySelector('[data-testid="intent-resolution"]')?.innerText?.trim() ?? '';
+    }, intentSel);
+    if (
+      !resolutionText.includes('Resolved failed by ops-bob · No charge on the rail dashboard')
+    ) {
+      throw new Error(`unexpected intent-resolution: "${resolutionText}"`);
+    }
+    await scrollAboveCaptionSel(page, intentSel);
+    await assertSelNotUnderCaption(page, intentSel, 's7-intent-resolved', FULL);
+    await highlightIntentPanelAndItem(page, intentSel);
+
+    await scrollIntoViewAboveCaptionSel(page, '[data-testid="gauge"]', { gap: 16, minTop: 8 });
+    await highlight(page, 'gauge');
+    await assertNotUnderCaption(page, 'gauge', 's7-gauge-107', FULL);
+    resolveTimingFields.s7GaugeVisibleAtSec = (Date.now() - t0) / 1000;
+    await assertSpent(page, 's7-end', '$107.00');
+    await pause(page, 1500);
+  });
+
+  // Scene 8 — CLI
+  await runScene('cli', async (scene, scheduleCaptions) => {
     const commandLine = agentCliCommand(apiUrl);
     const cliResult = await runAgentCli(apiUrl);
 
@@ -1086,12 +1742,20 @@ try {
     await pause(page, 800);
 
     const lineCount = stdoutUtf8.split('\n').length;
+    const revealBudgetMs = Math.max(
+      0,
+      (scene.end - 6 - 1) * 1000 - (Date.now() - t0),
+    );
+    const perLine = Math.min(
+      600,
+      Math.max(150, Math.floor(revealBudgetMs / Math.max(1, lineCount))),
+    );
     for (let i = 0; i < lineCount; i++) {
       await page.evaluate((idx) => {
         const el = document.getElementById(`line-${idx}`);
         if (el) el.style.visibility = 'visible';
       }, i);
-      await pause(page, 600);
+      await pause(page, perLine);
     }
 
     await page.evaluate(() => {
@@ -1106,7 +1770,7 @@ try {
     await showEndCard(page);
   });
 
-  await until(170.3);
+  await until(TOTAL_SECONDS + 0.3);
 
   const video = page.video();
   await page.close();
@@ -1121,14 +1785,30 @@ try {
   browser = null;
 
   const timingPath = path.join(os.tmpdir(), 'agent-pay-submission-timing.json');
-  fs.writeFileSync(
-    timingPath,
-    `${JSON.stringify({ t0, scenes: timingLog, captionOverlapChecks }, null, 2)}\n`,
+  const timingPayload = {
+    totalSeconds: TOTAL_SECONDS,
+    ledgerPath,
+    seedStdout,
+    spentChecks,
+    ...resolveTimingFields,
+    t0,
+    scenes: timingLog,
+    captionOverlapChecks,
+  };
+  const timingJson = `${JSON.stringify(timingPayload, null, 2)}\n`;
+  fs.writeFileSync(timingPath, timingJson);
+  if (process.env.TIMING_OUT) {
+    fs.writeFileSync(process.env.TIMING_OUT, timingJson);
+  }
+
+  const captionFailing = captionOverlapChecks.filter((c) => captionCheckFails(c));
+  console.log(
+    `caption checks: ${captionOverlapChecks.length} total, ${captionFailing.length} failing`,
   );
 
   for (const row of timingLog) {
     console.log(
-      `scene ${row.scene} (${row.title}): planned ${row.plannedStart.toFixed(1)}–${row.plannedEnd.toFixed(1)}s, actual ${row.actualStart.toFixed(2)}–${row.actualEnd.toFixed(2)}s`,
+      `${row.id} (${row.role}, ${row.title}): planned ${row.plannedStart.toFixed(1)}–${row.plannedEnd.toFixed(1)}s, actual ${row.actualStart.toFixed(2)}–${row.actualEnd.toFixed(2)}s`,
     );
   }
   console.log(`timing log: ${timingPath}`);
@@ -1155,7 +1835,7 @@ try {
   }
 } finally {
   for (const t of captionTimers) clearTimeout(t);
-  await stopDemoRunner();
+  await stopServers();
 }
 
 process.exit(exitCode);

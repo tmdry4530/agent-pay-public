@@ -300,6 +300,29 @@ describe('App r3 resolve and race banners', () => {
     }
   });
 
+  it('quote card shows selected intent after Resolve…, not a stale scenario draft', async () => {
+    const client = createInMemoryClient({
+      payOutcome: 'timeout',
+      payTimeoutMs: 50,
+      now: () => new Date('2026-03-01T12:00:00.000Z'),
+    });
+    const user = await runNeedsCheckScenario(client);
+    const openaiIntentId = (await client.getLedger()).entries[0]!.intent.id;
+    await user.click(screen.getByTestId('scenario-needs-approval'));
+    await user.click(screen.getByTestId('btn-quote'));
+
+    const quoteCard = screen.getByTestId('quote-card');
+    expect(within(quoteCard).getByText('near-compute')).toBeInTheDocument();
+    expect(quoteCard).toHaveTextContent('$75.00');
+
+    await user.click(screen.getByTestId('btn-open-resolve'));
+
+    expect(within(quoteCard).getByText('openai-api')).toBeInTheDocument();
+    expect(quoteCard).toHaveTextContent('$12.00');
+    expect(within(quoteCard).getByText(openaiIntentId)).toBeInTheDocument();
+    expect(within(quoteCard).queryByText('near-compute')).not.toBeInTheDocument();
+  });
+
   it('btn-open-resolve opens resolve form for needs-check entry', async () => {
     const client = createInMemoryClient({
       payOutcome: 'timeout',
