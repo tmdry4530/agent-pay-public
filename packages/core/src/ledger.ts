@@ -174,6 +174,7 @@ export class Ledger {
       if (file.entries.some((e) => e.intent.id === intent.id)) {
         throw new LedgerError('duplicate_intent', `intent ${intent.id} already recorded`);
       }
+      assertRecordable(intent);
       utcDay(intent.createdAt); // validates createdAt
       const at = this.#now().toISOString();
       const entry: LedgerEntry = { intent: structuredClone(intent), decisions: [], recordedAt: at, updatedAt: at };
@@ -196,6 +197,7 @@ export class Ledger {
     return this.#mutate((file) => {
       const existing = file.entries.find((e) => e.intent.id === intent.id);
       if (existing) return { entry: existing, created: false };
+      assertRecordable(intent);
       utcDay(intent.createdAt); // validates createdAt
       const at = this.#now().toISOString();
       const entry: LedgerEntry = { intent: structuredClone(intent), decisions: [], recordedAt: at, updatedAt: at };
@@ -584,6 +586,26 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const isDate = (v: unknown) => typeof v === 'string' && !Number.isNaN(Date.parse(v));
 
 /**
+ * The intent fields the ledger file schema requires (see ledgerFileProblem). The write
+ * paths check them too, so the ledger never writes an intent it would later refuse to
+ * read back as ledger_corrupt (e.g. an empty payee).
+ */
+function intentProblem(intent: Record<string, unknown>): string | undefined {
+  for (const key of ['id', 'agentId', 'payee', 'currency'] as const) {
+    if (typeof intent[key] !== 'string' || intent[key] === '') return `intent.${key} is not a non-empty string`;
+  }
+  if (typeof intent.amount !== 'number' || !Number.isFinite(intent.amount)) return 'intent.amount is not a finite number';
+  if (!isDate(intent.createdAt)) return 'intent.createdAt is not a valid date';
+  return undefined;
+}
+
+/** Throws LedgerError invalid_input (nothing written) for an intent the file schema would reject. */
+function assertRecordable(intent: PaymentIntent): void {
+  const problem = intentProblem(intent as unknown as Record<string, unknown>);
+  if (problem) throw new LedgerError('invalid_input', `${problem}; intent not recorded`);
+}
+
+/**
  * Structural check of a parsed ledger file (F10). Returns a description of the
  * first problem found, or undefined when the file is usable. Only fields the
  * ledger and policy arithmetic rely on are checked; unknown extra fields are kept.
@@ -598,11 +620,8 @@ function ledgerFileProblem(json: unknown): string | undefined {
     if (!isObject(e)) return `${at} is not an object`;
     const intent = e.intent;
     if (!isObject(intent)) return `${at}.intent is not an object`;
-    for (const key of ['id', 'agentId', 'payee', 'currency'] as const) {
-      if (typeof intent[key] !== 'string' || intent[key] === '') return `${at}.intent.${key} is not a non-empty string`;
-    }
-    if (typeof intent.amount !== 'number' || !Number.isFinite(intent.amount)) return `${at}.intent.amount is not a finite number`;
-    if (!isDate(intent.createdAt)) return `${at}.intent.createdAt is not a valid date`;
+    const bad = intentProblem(intent);
+    if (bad) return `${at}.${bad}`;
     const id = intent.id as string;
     if (ids.has(id)) return `${at}.intent.id ${JSON.stringify(id)} is duplicated`;
     ids.add(id);

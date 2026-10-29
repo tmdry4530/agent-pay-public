@@ -35,7 +35,9 @@ const isLimit = (v: unknown): v is number => typeof v === 'number' && Number.isF
 /**
  * Why `policy` / `ledgerState` cannot be evaluated safely, or undefined when they can.
  * perTxMax and dailyMax must be finite numbers >= 0; requireApprovalAbove a number >= 0
- * (Infinity allowed: never ask a human); allowedPayees an array; agentId a string;
+ * (Infinity allowed: never ask a human); allowedPayees an array of distinct, non-empty strings
+ * without leading/trailing whitespace (exact-string comparison, no case folding; a
+ * whitespace-only entry is reported as empty); agentId a string;
  * ledgerState.dailyTotal a finite number >= 0.
  */
 export function policyProblem(policy: Policy, ledgerState: LedgerState): string | undefined {
@@ -46,6 +48,14 @@ export function policyProblem(policy: Policy, ledgerState: LedgerState): string 
   const t = policy.requireApprovalAbove;
   if (typeof t !== 'number' || Number.isNaN(t) || t < 0) return `requireApprovalAbove must be a number >= 0, got ${String(t)}`;
   if (!Array.isArray(policy.allowedPayees)) return 'allowedPayees must be an array';
+  const payees = new Set<string>();
+  for (const [i, p] of policy.allowedPayees.entries()) {
+    if (typeof p !== 'string') return `allowedPayees[${i}] must be a string`;
+    if (p.trim() === '') return `allowedPayees[${i}] is empty`;
+    if (p.trim() !== p) return `allowedPayees[${i}] ${JSON.stringify(p)} has leading or trailing whitespace`;
+    if (payees.has(p)) return `allowedPayees[${i}] ${JSON.stringify(p)} is a duplicate`;
+    payees.add(p);
+  }
   if (policy.currency !== undefined && typeof policy.currency !== 'string') return 'currency must be a string';
   const currency = (policy.currency ?? DEFAULT_CURRENCY).toUpperCase();
   const decimals = currencyDecimals(currency);
@@ -87,6 +97,9 @@ export function evaluate(policy: Policy, intent: PaymentIntent, ledgerState: Led
   const amountMinor = toMinorUnits(amount, decimals);
   if (amountMinor === undefined) {
     return reject(ReasonCode.InvalidAmount, `${policyCurrency} allows at most ${decimals} decimal places, got ${amount}`);
+  }
+  if (typeof intent.payee !== 'string' || intent.payee.trim() === '') {
+    return reject(ReasonCode.PayeeNotAllowed, `payee must be a non-empty string, got ${JSON.stringify(intent.payee)}`);
   }
   if (!policy.allowedPayees.includes(intent.payee)) {
     return reject(ReasonCode.PayeeNotAllowed, `payee "${intent.payee}" is not in the allowed list`);
