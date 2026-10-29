@@ -87,7 +87,7 @@ export async function resolveIntent(
   try {
     await ledger.settleReceipt(intentId, newReceipt, resolution);
   } catch (err) {
-    if (err instanceof LedgerError) {
+    if (err instanceof LedgerError && err.code === 'precondition_failed') {
       const again = await ledger.get(intentId);
       if (again?.receipt && again.receipt.status !== 'pending') {
         throw new PaymentError(

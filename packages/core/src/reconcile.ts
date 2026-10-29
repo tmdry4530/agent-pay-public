@@ -84,7 +84,7 @@ export async function reconcile(ledger: Ledger, adapter: PaymentAdapter): Promis
     } catch (err) {
       // LedgerError: a concurrent settle won the compare-and-set; nothing was written by this run.
       const detail = err instanceof Error ? err.message : String(err);
-      summary.errors.push({ intentId, error: `${err instanceof LedgerError ? 'ledger_conflict' : 'ledger_error'}: ${detail}` });
+      summary.errors.push({ intentId, error: `${err instanceof LedgerError && err.code === 'precondition_failed' ? 'ledger_conflict' : 'ledger_error'}: ${detail}` });
       continue;
     }
     summary.updated.push({ intentId, from: 'pending', to: fresh.status });
@@ -147,7 +147,7 @@ export async function refreshIntent(
   try {
     await ledger.settleReceipt(intentId, fresh);
   } catch (err) {
-    if (err instanceof LedgerError) {
+    if (err instanceof LedgerError && err.code === 'precondition_failed') {
       const again = await ledger.get(intentId);
       if (again?.receipt && again.receipt.status !== 'pending') {
         throw new PaymentError(

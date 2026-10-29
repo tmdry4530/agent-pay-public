@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { LedgerError } from './errors.ts';
 import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
 
 export type PaymentStatus = 'paid' | 'failed';
@@ -45,14 +46,12 @@ export interface LedgerOptions {
   now?: () => Date;
 }
 
-export class LedgerError extends Error {
-  override name = 'LedgerError';
-}
+export { LedgerError, type LedgerErrorCode } from './errors.ts';
 
 /** UTC calendar day "YYYY-MM-DD" of a Date or ISO string. */
 export function utcDay(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  if (Number.isNaN(d.getTime())) throw new LedgerError(`invalid date: ${String(date)}`);
+  if (Number.isNaN(d.getTime())) throw new LedgerError('invalid_input', `invalid date: ${String(date)}`);
   return d.toISOString().slice(0, 10);
 }
 
@@ -110,7 +109,7 @@ export class Ledger {
   recordIntent(intent: PaymentIntent): Promise<LedgerEntry> {
     return this.#mutate((file) => {
       if (file.entries.some((e) => e.intent.id === intent.id)) {
-        throw new LedgerError(`intent ${intent.id} already recorded`);
+        throw new LedgerError('duplicate_intent', `intent ${intent.id} already recorded`);
       }
       utcDay(intent.createdAt); // validates createdAt
       const at = this.#now().toISOString();
@@ -203,11 +202,12 @@ export class Ledger {
       const entry = find(file, intentId);
       if (entry.decision?.status !== 'approved') {
         throw new LedgerError(
+          'precondition_failed',
           `intent ${intentId} cannot be paid: decision is ${entry.decision?.status ?? 'missing'}`,
         );
       }
       if (entry.paymentStatus !== undefined) {
-        throw new LedgerError(`intent ${intentId} already has payment status ${entry.paymentStatus}`);
+        throw new LedgerError('precondition_failed', `intent ${intentId} already has payment status ${entry.paymentStatus}`);
       }
       entry.paymentStatus = status;
       entry.updatedAt = this.#now().toISOString();
@@ -225,15 +225,17 @@ export class Ledger {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
       if (receipt.intentId !== intentId) {
-        throw new LedgerError(`receipt intentId ${receipt.intentId} does not match ${intentId}`);
+        throw new LedgerError('invalid_input', `receipt intentId ${receipt.intentId} does not match ${intentId}`);
       }
       if (entry.paymentStatus !== 'paid') {
         throw new LedgerError(
+          'precondition_failed',
           `intent ${intentId} cannot settle receipt: payment status is ${entry.paymentStatus ?? 'missing'}`,
         );
       }
       if (entry.receipt?.status !== 'pending') {
         throw new LedgerError(
+          'precondition_failed',
           `intent ${intentId} receipt is not pending (status is ${entry.receipt?.status ?? 'missing'})`,
         );
       }
@@ -254,10 +256,10 @@ export class Ledger {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
       if (receipt.intentId !== intentId) {
-        throw new LedgerError(`receipt intentId ${receipt.intentId} does not match ${intentId}`);
+        throw new LedgerError('invalid_input', `receipt intentId ${receipt.intentId} does not match ${intentId}`);
       }
       if (entry.paymentStatus === undefined) {
-        throw new LedgerError(`intent ${intentId} has no payment recorded`);
+        throw new LedgerError('precondition_failed', `intent ${intentId} has no payment recorded`);
       }
       entry.receipt = { ...receipt };
       entry.updatedAt = this.#now().toISOString();
@@ -318,7 +320,7 @@ export class Ledger {
     }
     const parsed = JSON.parse(raw) as LedgerFile;
     if (parsed?.version !== 1 || !Array.isArray(parsed.entries)) {
-      throw new LedgerError(`unsupported ledger file format at ${this.filePath}`);
+      throw new LedgerError('invalid_input', `unsupported ledger file format at ${this.filePath}`);
     }
     // Files written before decision history: back-fill in memory only. The file is
     // rewritten in the new shape on the next mutation, never by a read.
@@ -344,10 +346,10 @@ export class Ledger {
 function assertDecidable(entry: LedgerEntry, ifStatus: DecisionStatus | undefined): void {
   const intentId = entry.intent.id;
   if (entry.paymentStatus !== undefined) {
-    throw new LedgerError(`intent ${intentId} already has a payment; decision is final`);
+    throw new LedgerError('precondition_failed', `intent ${intentId} already has a payment; decision is final`);
   }
   if (ifStatus !== undefined && entry.decision?.status !== ifStatus) {
-    throw new LedgerError(`intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${ifStatus}`);
+    throw new LedgerError('precondition_failed', `intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${ifStatus}`);
   }
 }
 
@@ -369,6 +371,6 @@ function stateFor(file: LedgerFile, intent: PaymentIntent): LedgerState {
 
 function find(file: LedgerFile, intentId: string): LedgerEntry {
   const entry = file.entries.find((e) => e.intent.id === intentId);
-  if (!entry) throw new LedgerError(`intent ${intentId} not found`);
+  if (!entry) throw new LedgerError('not_found', `intent ${intentId} not found`);
   return entry;
 }

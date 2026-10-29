@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { PaymentAdapter } from './adapter.ts';
+import { LedgerError } from './errors.ts';
 import type { Ledger, LedgerEntry } from './ledger.ts';
 import { ReasonCode, evaluate } from './policy.ts';
 import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Policy, Receipt } from './types.ts';
@@ -156,7 +157,9 @@ export async function approve(intentId: string, options: ApproveOptions): Promis
   };
   // ifStatus guards against two concurrent approvals both paying; the re-check and the
   // decision are one atomic step so concurrent approvals cannot exceed the daily limit.
-  const decision = await decideAtomically(ledger, intentId, decide, 'needs_approval');
+  const decision = await decideAtomically(ledger, intentId, decide, 'needs_approval').catch((err: unknown) =>
+    raceLost(ledger, intentId, err),
+  );
   if (decision.status !== 'approved') return { intentId, status: 'rejected', decision };
   return payApproved(entry.intent, decision, ledger, adapter);
 }
@@ -206,8 +209,24 @@ export async function reject(intentId: string, options: RejectOptions): Promise<
     status: 'rejected',
     reason: `${ReasonCode.RejectedByHuman}: rejected by ${by}${note ? `; ${note}` : ''}`,
   };
-  await ledger.recordDecision(intentId, decision, { ifStatus: 'needs_approval', actor: approver });
+  await ledger
+    .recordDecision(intentId, decision, { ifStatus: 'needs_approval', actor: approver })
+    .catch((err: unknown) => raceLost(ledger, intentId, err));
   return { intentId, status: 'rejected', decision };
+}
+
+/**
+ * A conditional decision write (ifStatus 'needs_approval') failed. If the entry is no
+ * longer awaiting approval, a concurrent approve/reject won the race: throw the same
+ * PaymentError pendingEntry would throw now ('already_paid' / 'not_pending', HTTP 409)
+ * instead of the ledger's precondition error. Otherwise rethrow the original error.
+ * Works for any ledger implementation (it re-reads instead of trusting the error class).
+ */
+async function raceLost(ledger: Ledger, intentId: string, err: unknown): Promise<never> {
+  if (err instanceof PaymentError) throw err;
+  if (err instanceof LedgerError && err.code !== 'precondition_failed') throw err;
+  await pendingEntry(ledger, intentId); // throws the PaymentError when the state moved on
+  throw err;
 }
 
 async function pendingEntry(ledger: Ledger, intentId: string): Promise<LedgerEntry> {
