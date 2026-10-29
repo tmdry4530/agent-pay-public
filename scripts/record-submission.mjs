@@ -601,6 +601,23 @@ async function scrollAboveCaptionSel(page, selector) {
   await pause(page, 400);
 }
 
+/** The app smooth-scrolls the stepper into view when the step changes; wait for that to finish. */
+async function waitScrollSettled(page, { stableMs = 300, maxMs = 3000 } = {}) {
+  const t0 = Date.now();
+  let last = await page.evaluate(() => window.scrollY);
+  let stableSince = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    await page.waitForTimeout(100);
+    const y = await page.evaluate(() => window.scrollY);
+    if (y !== last) {
+      last = y;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= stableMs) {
+      return;
+    }
+  }
+}
+
 async function scrollAboveCaption(page, testId) {
   await scrollAboveCaptionSel(page, `[data-testid="${testId}"]`);
 }
@@ -1426,6 +1443,7 @@ try {
       .click();
     await page.getByTestId('resolve-form').waitFor({ state: 'visible' });
     await pause(page, 600);
+    await waitScrollSettled(page);
 
     await scrollAboveCaption(page, 'decision');
     resolveTimingFields.outcomeBadgeBefore = (
@@ -1470,6 +1488,7 @@ try {
       throw new Error(`unexpected resolve-success text: "${successText}"`);
     }
     resolveTimingFields.resolveBanner = successText;
+    await waitScrollSettled(page);
 
     await page.getByTestId('payment-outcome-text').waitFor({ state: 'visible' });
     resolveTimingFields.resolveOutcome = (
