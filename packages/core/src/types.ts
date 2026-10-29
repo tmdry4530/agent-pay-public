@@ -11,7 +11,10 @@ export interface PaymentIntent {
   amount: number;
   currency: Currency;
   purpose: string;
-  /** ISO 8601 timestamp. Its UTC date decides which day the intent counts toward. */
+  /**
+   * ISO 8601 timestamp, client-supplied and kept for the record only: the daily limit
+   * buckets by the server clock (F2). Replays compare it by instant (F14).
+   */
   createdAt: string;
 }
 
@@ -71,6 +74,14 @@ export interface Receipt {
 
 /** Snapshot of ledger data that `evaluate` needs. */
 export interface LedgerState {
-  /** Amount already counted for this agent on the intent's UTC day. */
+  /**
+   * Amount already counted for this agent, in the intent's currency, on the current UTC day
+   * of the ledger's server clock (Ledger) or of intent.createdAt (legacy ledgers).
+   */
   dailyTotal: number;
+  /**
+   * The same total as exact integer minor units of the intent's currency (cents, yoctoNEAR).
+   * Set by Ledger; when absent evaluate derives it from dailyTotal, rounding up.
+   */
+  dailyTotalMinor?: bigint;
 }
