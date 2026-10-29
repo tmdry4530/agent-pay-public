@@ -104,7 +104,7 @@ Policy rejections are not HTTP errors: they come back as `status: "rejected"` re
 
 **CORS:** only `http://localhost:<port>` and `http://127.0.0.1:<port>` origins are echoed in
 `Access-Control-Allow-Origin` (with `Vary: Origin`). `OPTIONS` answers `204` with `Allow`; for an allowed origin it
-adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type, Idempotency-Key` and `Max-Age: 600`. Other origins
+adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type, Idempotency-Key`, `Access-Control-Expose-Headers: Date`, and `Max-Age: 600`. Other origins
 get no CORS headers.
 
 **Origin (CSRF):** for methods other than `GET`, `HEAD`, and `OPTIONS`, if the request sends an `Origin` header that

@@ -220,7 +220,10 @@ export function createApp(options: AppOptions) {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const origin = req.headers.origin;
     const cors: Record<string, string> = { Vary: 'Origin' };
-    if (isAllowedOrigin(origin)) cors['Access-Control-Allow-Origin'] = origin;
+    if (isAllowedOrigin(origin)) {
+      cors['Access-Control-Allow-Origin'] = origin;
+      cors['Access-Control-Expose-Headers'] = 'Date';
+    }
     try {
       const path = new URL(req.url ?? '/', 'http://localhost').pathname;
       let match: { route: Route; params: string[] } | undefined;
