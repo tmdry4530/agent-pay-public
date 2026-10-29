@@ -160,18 +160,19 @@ test('reject helper finalizes a pending intent without paying', async (t) => {
   await assert.rejects(approve('pi-1', { policy, ledger, adapter }), /not_pending/);
 });
 
-test('adapter throwing -> failed result, payment recorded failed, not counted', async (t) => {
+test('adapter throwing -> pending + needsManualResolve (F3), amount stays counted', async (t) => {
   const { ledger } = await setup(t);
   const adapter = new MockAdapter(() => {
     throw new Error('rail timeout');
   });
   const result = await runPayment(intent({ amount: 30 }), policy, ledger, adapter);
-  assert.equal(result.status, 'failed');
+  assert.equal(result.status, 'paid');
+  assert.equal(result.needsManualResolve, true);
   assert.equal(result.decision.status, 'approved');
   assert.equal(result.error, 'adapter_error: rail timeout');
-  assert.equal(result.receipt, undefined);
-  assert.equal((await ledger.get('pi-1'))?.paymentStatus, 'failed');
-  assert.equal(await ledger.dailyTotal('agent-1'), 0);
+  assert.equal(result.receipt?.status, 'pending');
+  assert.equal((await ledger.get('pi-1'))?.paymentStatus, 'paid');
+  assert.equal(await ledger.dailyTotal('agent-1'), 30);
 });
 
 test('declined receipt -> failed, receipt kept, not counted', async (t) => {
@@ -185,24 +186,25 @@ test('declined receipt -> failed, receipt kept, not counted', async (t) => {
   assert.equal(await ledger.dailyTotal('agent-1'), 0);
 });
 
-test('receipt intentId or rail mismatch -> failed, not stored as a receipt', async (t) => {
+test('receipt intentId or rail mismatch -> pending + needsManualResolve (F3), mismatched receipt not stored', async (t) => {
   const { ledger } = await setup(t);
   const wrongId = new MockAdapter(() => ({ intentId: 'other', rail: 'mock', externalId: 'x', status: 'succeeded', at: NOW }));
   const r1 = await runPayment(intent({ id: 'w1' }), policy, ledger, wrongId);
-  assert.equal(r1.status, 'failed');
+  assert.equal(r1.needsManualResolve, true);
   assert.match(r1.error ?? '', /^receipt_mismatch: receipt intentId "other"/);
 
   const wrongRail = new MockAdapter((i) => ({ intentId: i.id, rail: 'near', externalId: 'x', status: 'succeeded', at: NOW }));
   const r2 = await runPayment(intent({ id: 'w2' }), policy, ledger, wrongRail);
-  assert.equal(r2.status, 'failed');
+  assert.equal(r2.needsManualResolve, true);
   assert.match(r2.error ?? '', /^receipt_mismatch: receipt rail "near"/);
 
   for (const id of ['w1', 'w2']) {
     const e = await ledger.get(id);
-    assert.equal(e?.paymentStatus, 'failed');
-    assert.equal(e?.receipt, undefined);
+    assert.equal(e?.paymentStatus, 'paid');
+    assert.equal(e?.receipt?.externalId, '', 'placeholder pending receipt, not the mismatched one');
+    assert.equal(e?.receipt?.status, 'pending');
   }
-  assert.equal(await ledger.dailyTotal('agent-1'), 0);
+  assert.equal(await ledger.dailyTotal('agent-1'), 20);
 });
 
 test('idempotent replay: same intent returns stored outcome without paying again; conflicts throw', async (t) => {

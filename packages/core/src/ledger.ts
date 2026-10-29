@@ -22,6 +22,8 @@ export interface PaymentSubmission {
 export interface PaymentOutcome {
   status: 'paid' | 'failed';
   receipt?: Receipt;
+  /** The rail outcome is unknown (pay threw / timed out / invalid receipt); see LedgerEntry.needsManualResolve. */
+  needsManualResolve?: true;
 }
 
 export interface ReceiptResolution {
@@ -46,6 +48,13 @@ export interface LedgerEntry {
   /** Set when the payment was handed to a rail (markSubmitting). Kept after it settles. */
   submission?: PaymentSubmission;
   receipt?: Receipt;
+  /**
+   * True while the rail outcome is unknown (adapter.pay threw, timed out or returned an
+   * invalid receipt). The entry is paid with a placeholder 'pending' receipt (externalId
+   * ''), keeps holding the limit, is skipped by reconcile/refresh and is never re-sent;
+   * an operator settles it with resolveIntent, which clears the flag.
+   */
+  needsManualResolve?: true;
   /** Set only by a manual operator resolve (POST /intents/:id/resolve). */
   resolution?: ReceiptResolution;
   /** ISO time the intent was recorded (from the injected clock). */
@@ -298,6 +307,7 @@ export class Ledger {
         entry.receipt = { ...outcome.receipt };
         if (outcome.receipt.status === 'failed') entry.paymentStatus = 'failed';
       }
+      if (outcome.needsManualResolve === true) entry.needsManualResolve = true;
       entry.updatedAt = this.#now().toISOString();
       return entry;
     });
@@ -334,6 +344,7 @@ export class Ledger {
       }
       entry.receipt = { ...receipt };
       entry.paymentStatus = receipt.status === 'failed' ? 'failed' : 'paid';
+      delete entry.needsManualResolve;
       if (resolution !== undefined) entry.resolution = { ...resolution };
       entry.updatedAt = this.#now().toISOString();
       return entry;
@@ -594,6 +605,7 @@ function ledgerFileProblem(json: unknown): string | undefined {
     if (e.paymentStatus !== undefined && !PAYMENT_STATUSES.includes(e.paymentStatus as string)) {
       return `${at}.paymentStatus ${JSON.stringify(e.paymentStatus)} is unknown`;
     }
+    if (e.needsManualResolve !== undefined && e.needsManualResolve !== true) return `${at}.needsManualResolve must be true when present`;
     if (e.submission !== undefined) {
       const sub = e.submission;
       if (!isObject(sub) || typeof sub.rail !== 'string' || !isDate(sub.at)) return `${at}.submission must have a rail and a valid at`;

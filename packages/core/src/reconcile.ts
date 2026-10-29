@@ -31,7 +31,8 @@ function validateStatusReceipt(
 
 /**
  * Asks `adapter.status` about every ledger entry that is paid with a `pending`
- * receipt on this adapter's rail, and settles the ones the rail reports as
+ * receipt on this adapter's rail (except needsManualResolve entries, which only
+ * resolveIntent settles), and settles the ones the rail reports as
  * `succeeded` or `failed` (Ledger.settleReceipt; `failed` also marks the payment
  * failed, so it drops out of the daily total).
  *
@@ -56,7 +57,7 @@ export async function reconcile(ledger: Ledger, adapter: PaymentAdapter): Promis
 
   const entries = await ledger.list();
   for (const entry of entries) {
-    if (entry.paymentStatus !== 'paid') continue;
+    if (entry.paymentStatus !== 'paid' || entry.needsManualResolve === true) continue;
     const stored = entry.receipt;
     if (!stored || stored.status !== 'pending' || stored.rail !== adapter.rail) continue;
 
@@ -114,6 +115,12 @@ export async function refreshIntent(
     throw new PaymentError(
       'receipt_not_pending',
       `intent ${intentId} receipt status is ${entry.receipt.status}, not pending`,
+    );
+  }
+  if (entry.needsManualResolve === true) {
+    throw new PaymentError(
+      'status_unsupported',
+      `intent ${intentId} needs a manual resolve (the rail outcome of the payment is unknown)`,
     );
   }
   if (adapter.status === undefined || entry.receipt.rail !== adapter.rail) {

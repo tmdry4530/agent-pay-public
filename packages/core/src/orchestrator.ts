@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { PaymentAdapter } from './adapter.ts';
 import { LedgerError } from './errors.ts';
-import type { Ledger, LedgerEntry } from './ledger.ts';
+import type { Ledger, LedgerEntry, PaymentOutcome } from './ledger.ts';
 import { ReasonCode, evaluate } from './policy.ts';
 import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Policy, Receipt } from './types.ts';
 
@@ -18,8 +18,18 @@ export interface PaymentResult {
   decision: Decision;
   /** Present when the adapter returned a valid receipt (including a declined one). */
   receipt?: Receipt;
-  /** Only when status is 'failed': "<FailureCode>: <detail>". */
+  /**
+   * "<FailureCode>: <detail>". Set when status is 'failed', and when needsManualResolve
+   * is true (why the outcome is unknown).
+   */
   error?: string;
+  /**
+   * The rail outcome is unknown (adapter.pay threw, timed out, or returned an invalid
+   * receipt). status is 'paid' with a placeholder 'pending' receipt (externalId ''); the
+   * amount keeps holding the limit and the payment is never re-sent. Settle it with
+   * resolveIntent (POST /intents/:id/resolve) after checking the rail.
+   */
+  needsManualResolve?: true;
   /** True when runPayment found the intent already recorded and returned its stored outcome. */
   replayed?: true;
 }
@@ -28,9 +38,9 @@ export interface PaymentResult {
 export const FailureCode = {
   /** The rail resolved with a receipt whose status is 'failed'. */
   PaymentDeclined: 'payment_declined',
-  /** adapter.pay threw. */
+  /** adapter.pay threw (outcome unknown: needsManualResolve). Also used for adapter.status throwing. */
   AdapterError: 'adapter_error',
-  /** The receipt's intentId/rail/status violates the PaymentAdapter contract. */
+  /** The receipt's intentId/rail/status violates the PaymentAdapter contract (pay: needsManualResolve). */
   ReceiptMismatch: 'receipt_mismatch',
   /** Replay of an entry stored as failed (the original error text is not persisted). */
   PaymentFailed: 'payment_failed',
@@ -244,10 +254,12 @@ async function pendingEntry(ledger: Ledger, intentId: string): Promise<LedgerEnt
  * Pays an intent whose 'approved' decision is already recorded.
  * - Valid receipt with status 'succeeded'/'pending': payment 'paid' + receipt -> 'paid'.
  * - Valid receipt with status 'failed' (declined): payment 'failed' + receipt -> 'failed'.
- * - adapter.pay throws, or the receipt's intentId/rail/status is wrong: payment
- *   'failed', no receipt stored -> 'failed' with `error`. A failed payment does
- *   not count toward the daily total. On a mismatch the rail may still have
- *   moved money; reconcile it out of band.
+ * - adapter.pay throws, or the receipt's intentId/rail/status is wrong (F3): the
+ *   outcome is unknown, so the payment is recorded 'paid' with a placeholder 'pending'
+ *   receipt and needsManualResolve -> 'paid' + needsManualResolve + `error`. The amount
+ *   keeps holding the limit; nothing is re-sent; an operator settles it via resolveIntent.
+ * With a Ledger (markSubmitting/recordPaymentResult) the entry is 'submitting' while
+ * adapter.pay runs (F4) and the outcome + receipt are written in one step.
  */
 async function payApproved(
   intent: PaymentIntent,
@@ -257,37 +269,44 @@ async function payApproved(
 ): Promise<PaymentResult> {
   const base = { intentId: intent.id, decision };
   const atomic = typeof ledger.markSubmitting === 'function' && typeof ledger.recordPaymentResult === 'function';
+  let submittedAt = new Date().toISOString();
   if (atomic) {
     // F4: recorded before the rail sees the payment, so a crash mid-pay leaves a
     // 'submitting' entry (holds the limit, replays as in_progress, settled via resolve).
-    await ledger.markSubmitting(intent.id, adapter.rail).catch((err: unknown) => {
+    const marked = await ledger.markSubmitting(intent.id, adapter.rail).catch((err: unknown) => {
       if (err instanceof LedgerError && err.code === 'precondition_failed') {
         throw new PaymentError('in_progress', `intent ${intent.id} is already being paid`);
       }
       throw err;
     });
+    submittedAt = marked.submission?.at ?? submittedAt;
   }
-  const settle = async (status: 'paid' | 'failed', receipt?: Receipt): Promise<void> => {
+  const settle = async (status: 'paid' | 'failed', receipt?: Receipt, unknown = false): Promise<void> => {
     if (atomic) {
-      await ledger.recordPaymentResult(intent.id, receipt === undefined ? { status } : { status, receipt });
+      const outcome: PaymentOutcome = receipt === undefined ? { status } : { status, receipt };
+      if (unknown) outcome.needsManualResolve = true;
+      await ledger.recordPaymentResult(intent.id, outcome);
       return;
     }
     await ledger.recordPayment(intent.id, status);
     if (receipt !== undefined) await ledger.recordReceipt(intent.id, receipt);
   };
+  // F3: the rail may or may not have moved money. Keep the amount held (paid + placeholder
+  // pending receipt) and flag it for an operator instead of marking it failed.
+  const unknownOutcome = async (error: string): Promise<PaymentResult> => {
+    const placeholder: Receipt = { intentId: intent.id, rail: adapter.rail, externalId: '', status: 'pending', at: submittedAt };
+    await settle('paid', placeholder, true);
+    return { ...base, status: 'paid', receipt: placeholder, needsManualResolve: true, error };
+  };
   let receipt: Receipt;
   try {
     receipt = await adapter.pay(structuredClone(intent));
   } catch (err) {
-    await settle('failed');
     const detail = err instanceof Error ? err.message : String(err);
-    return { ...base, status: 'failed', error: `${FailureCode.AdapterError}: ${detail}` };
+    return unknownOutcome(`${FailureCode.AdapterError}: ${detail}`);
   }
   const mismatch = receiptMismatch(receipt, intent, adapter);
-  if (mismatch) {
-    await settle('failed');
-    return { ...base, status: 'failed', error: `${FailureCode.ReceiptMismatch}: ${mismatch}` };
-  }
+  if (mismatch) return unknownOutcome(`${FailureCode.ReceiptMismatch}: ${mismatch}`);
   const failed = receipt.status === 'failed';
   await settle(failed ? 'failed' : 'paid', receipt);
   if (failed) {
@@ -323,6 +342,9 @@ function replay(entry: LedgerEntry, intent: PaymentIntent): PaymentResult {
     throw new PaymentError('in_progress', `intent ${intent.id} payment is submitting on ${entry.submission?.rail ?? 'its rail'}`);
   }
   const receipt = entry.receipt ? { receipt: entry.receipt } : {};
+  if (entry.needsManualResolve === true && entry.paymentStatus === 'paid') {
+    return { ...base, ...receipt, status: 'paid', needsManualResolve: true };
+  }
   if (entry.paymentStatus === 'failed' || entry.receipt?.status === 'failed') {
     return { ...base, ...receipt, status: 'failed', error: `${FailureCode.PaymentFailed}: recorded as failed` };
   }
