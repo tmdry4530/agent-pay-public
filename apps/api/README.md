@@ -63,10 +63,19 @@ different body for the same id is `409 intent_conflict`. Optional header `Idempo
 must match (`400 invalid_body` if they differ). If `createdAt` is omitted and that id is already stored, the server
 reuses the stored `createdAt` so the retry replays.
 
-**`GET /ledger` entries** are core `LedgerEntry` objects as stored, including `decisions`: every decision, oldest
-first, as `{status, reason, at, actor?}` (`actor` is `policy` or the approver). `decision` is still the latest one.
+**GET /ledger response** — shape:
 
-**Today's totals:** `today.day` is the accounting day of the injected clock (the UTC day core's `accountingDay` assigns to an approval at that instant). `today.totals` is keyed by `agentId` for agents present in the ledger; each value is `Ledger.dailyTotals(agentId, day)` (upper-case currency → amount). There is no currency scalar and no `totalsByCurrency` field. Buckets follow core (approval time, not `intent.createdAt`).
+```json
+{"entries":[...],"today":{"day":"2026-10-29","totals":{"demo-agent":{"USD":87}}}}
+```
+
+`entries` are core `LedgerEntry` objects as stored, including `decisions`: every decision, oldest first, as
+`{status, reason, at, actor?}` (`actor` is `policy` or the approver). `decision` is still the latest one.
+
+`today.day` is core `accountingDay` for the server clock (UTC day of approval time, not `intent.createdAt`).
+`today.totals` is nested per agent (`agentId` → `{CURRENCY: amount}`); amounts come from
+`Ledger.dailyTotals(agentId, day)`. An agent with no counted spend for that day (e.g. spend dropped when
+`pending` → `failed`) maps to `{}`. No currency scalar and no `totalsByCurrency`.
 
 **Refresh contract:** `404 intent_not_found`; `409 no_receipt` (no receipt on the entry, e.g. rejected); `409 receipt_not_pending` when the receipt is already settled (`succeeded` / `failed` / `refunded`) — **409 instead of 200 `changed: false`** so clients know the intent is final and can read `GET /ledger`; `409 status_unsupported` when the adapter has no `status()` or the receipt rail differs. An entry flagged `needsManualResolve` (or a pending receipt whose `meta.needsManualResolve` is `true` / `"true"` when refresh already refuses with `status_unsupported`) is also `409 status_unsupported`, and `message` tells the caller to use `POST /intents/<id>/resolve` with that intent id. `502 status_check_failed` when `status()` throws or returns an invalid receipt (nothing stored).
 
@@ -88,6 +97,10 @@ batches with 2+ items). The route never calls the adapter (`pay()` or `status()`
 - No auth: like the rest of this demo API it is meant for localhost only; `resolvedBy` is self-reported.
 
 **Error body:** every error response is JSON `{"error":"<code>","message":"<detail>"}` with `Content-Type: application/json`. `error` is a bare machine code (no `:`). `message` is the detail after `"<code>: "` on `ValidationError`, `HttpError`, `PaymentError`, and `LedgerError` (if there is no detail, `message` is the code). Unknown errors are `500` `{"error":"internal_error","message":"unexpected server error"}` and do not include the thrown message. If the last-resort handler finds headers already sent, it ends the response without a second body.
+
+For `POST /intents/:id/approve`, `reject`, intent replay, and `refresh`, the web UI handles these `409` codes:
+`not_pending`, `already_paid`, `in_progress`, `status_unsupported`. Other `409`s keep their own codes in the table
+below (`intent_conflict`, `no_receipt`, `receipt_not_pending`, `precondition_failed`, `duplicate_intent` unchanged).
 
 | Status | `error` codes |
 | --- | --- |
