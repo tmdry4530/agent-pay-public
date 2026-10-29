@@ -1,7 +1,7 @@
 import type { PaymentAdapter } from './adapter.ts';
 import { LedgerError } from './errors.ts';
 import type { Ledger, LedgerEntry, PaymentOutcome } from './ledger.ts';
-import { ReasonCode, evaluate } from './policy.ts';
+import { ReasonCode, evaluate, policyProblem } from './policy.ts';
 import { AdapterTimeoutError, DEFAULT_PAY_TIMEOUT_MS, checkTimeout, withTimeout } from './timeout.ts';
 import type { Decision, DecisionStatus, LedgerState, PaymentIntent, Policy, Receipt } from './types.ts';
 
@@ -160,7 +160,12 @@ export async function approve(intentId: string, options: ApproveOptions): Promis
   const by = approver === undefined ? 'a human' : `"${approver}"`;
   const { amount, currency, payee } = entry.intent;
   const decide = (state: LedgerState): { decision: Decision; actor?: string } => {
-    const recheck = evaluate({ ...policy, requireApprovalAbove: Number.POSITIVE_INFINITY }, entry.intent, state);
+    // Validate the policy exactly as given (the same check evaluate() runs for runPayment)
+    // before overriding the threshold, so an invalid requireApprovalAbove fails closed too.
+    const problem = policyProblem(policy, state);
+    const recheck: Decision = problem
+      ? { status: 'rejected', reason: `${ReasonCode.InvalidPolicy}: ${problem}` }
+      : evaluate({ ...policy, requireApprovalAbove: Number.POSITIVE_INFINITY }, entry.intent, state);
     if (recheck.status !== 'approved') {
       // The policy re-check made this decision; the reason names who triggered it.
       return {
