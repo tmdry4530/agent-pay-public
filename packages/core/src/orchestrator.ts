@@ -95,18 +95,26 @@ export async function runPayment(
   ledger: Ledger,
   adapter: PaymentAdapter,
 ): Promise<PaymentResult> {
-  const existing = await ledger.get(intent.id);
-  if (existing) return replay(existing, intent);
-  try {
-    await ledger.recordIntent(intent);
-  } catch (err) {
-    // Lost a race with a concurrent runPayment for the same id.
-    const raced = await ledger.get(intent.id);
-    if (raced) return replay(raced, intent);
-    throw err;
-  }
   const decide = (state: LedgerState) => ({ decision: evaluate(policy, intent, state), actor: POLICY_ACTOR });
-  const decision = await decideAtomically(ledger, intent.id, decide);
+  let decision: Decision;
+  if (typeof ledger.recordIntentAndDecide === 'function') {
+    // Intent + decision in one write: no undecided orphan if anything fails in between.
+    const { entry, created } = await ledger.recordIntentAndDecide(intent, decide);
+    if (!created) return replay(entry, intent);
+    decision = entry.decision!;
+  } else {
+    const existing = await ledger.get(intent.id);
+    if (existing) return replay(existing, intent);
+    try {
+      await ledger.recordIntent(intent);
+    } catch (err) {
+      // Lost a race with a concurrent runPayment for the same id.
+      const raced = await ledger.get(intent.id);
+      if (raced) return replay(raced, intent);
+      throw err;
+    }
+    decision = await decideAtomically(ledger, intent.id, decide);
+  }
   if (decision.status !== 'approved') {
     return { intentId: intent.id, status: decision.status, decision };
   }

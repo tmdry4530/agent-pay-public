@@ -121,6 +121,30 @@ export class Ledger {
   }
 
   /**
+   * Records `intent` together with its first decision in ONE serialized write, so a
+   * crash or error can never leave an undecided entry behind. `decide` receives the
+   * LedgerState for the intent (same rules as ledgerStateFor). If the id is already
+   * recorded, nothing is written, `decide` is not called and `{ created: false }` is
+   * returned with the stored entry. If `decide` throws, nothing is written.
+   */
+  recordIntentAndDecide(
+    intent: PaymentIntent,
+    decide: (state: LedgerState) => { decision: Decision; actor?: string },
+  ): Promise<{ entry: LedgerEntry; created: boolean }> {
+    return this.#mutate((file) => {
+      const existing = file.entries.find((e) => e.intent.id === intent.id);
+      if (existing) return { entry: existing, created: false };
+      utcDay(intent.createdAt); // validates createdAt
+      const at = this.#now().toISOString();
+      const entry: LedgerEntry = { intent: structuredClone(intent), decisions: [], recordedAt: at, updatedAt: at };
+      const { decision, actor } = decide(stateFor(file, entry.intent));
+      this.#applyDecision(entry, decision, actor);
+      file.entries.push(entry);
+      return { entry, created: true };
+    });
+  }
+
+  /**
    * Records a decision: sets `decision` to it and appends it to `decisions` with
    * `at` (injected clock) and `options.actor` when given. A new decision is allowed
    * until a payment is recorded, e.g. needs_approval -> approved after a human approves.
