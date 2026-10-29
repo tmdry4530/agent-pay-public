@@ -11,6 +11,10 @@
  * - ledger_corrupt: the ledger file is unparseable or fails schema validation (message names
  *   the file and the first bad field). Nothing was written; needs an operator to restore
  *   or repair the file, retrying will not help.
+ * - ledger_missing: the ledger file existed (this process read or wrote it) and has since
+ *   disappeared. Nothing was recreated, so limits and history are not silently reset;
+ *   an operator must restore the file (or restart the process to start a fresh ledger
+ *   deliberately). Retrying will not help.
  * - lock_timeout: another live process held the ledger's lock file for longer than
  *   LedgerOptions.lockTimeoutMs. Nothing was written; transient, safe to retry.
  */
@@ -20,7 +24,8 @@ export type LedgerErrorCode =
   | 'precondition_failed'
   | 'invalid_input'
   | 'lock_timeout'
-  | 'ledger_corrupt';
+  | 'ledger_corrupt'
+  | 'ledger_missing';
 
 export class LedgerError extends Error {
   override name = 'LedgerError';

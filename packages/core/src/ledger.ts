@@ -87,6 +87,11 @@ export const LOCK_STALE_MS = 60_000;
 
 /** One promise chain per resolved file path, shared by every Ledger instance in this process. */
 const pathQueues = new Map<string, Promise<unknown>>();
+/**
+ * Resolved ledger paths this process has successfully read or written (F9). Only a path
+ * never seen may be created on ENOENT; a seen path that vanished throws ledger_missing.
+ */
+const knownFiles = new Set<string>();
 
 export { LedgerError, type LedgerErrorCode } from './errors.ts';
 
@@ -146,7 +151,11 @@ export class Ledger {
     this.#lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   }
 
-  /** Reads the ledger, creating an empty file when it does not exist. */
+  /**
+   * Reads the ledger, creating an empty file when it does not exist yet (first run).
+   * If the file was already read or written by this process and has disappeared, every
+   * operation throws LedgerError ledger_missing instead of recreating it (F9).
+   */
   load(): Promise<LedgerFile> {
     if (!this.#swept) return this.#serialize(() => this.#withFileLock(() => this.#read(true)));
     return this.#serialize(() => this.#read());
@@ -513,6 +522,9 @@ export class Ledger {
       raw = await readFile(this.filePath, 'utf8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      if (knownFiles.has(this.#key)) {
+        throw new LedgerError('ledger_missing', `${this.filePath} existed earlier in this process and has disappeared; refusing to recreate it (restore the file)`);
+      }
       if (!locked) return this.#withFileLock(() => this.#read(true));
       const file = emptyFile();
       await this.#write(file);
@@ -527,6 +539,7 @@ export class Ledger {
     const problem = ledgerFileProblem(json);
     if (problem) throw corrupt(this.filePath, problem);
     const parsed = json as LedgerFile;
+    knownFiles.add(this.#key);
     // Files written before decision history: back-fill in memory only. The file is
     // rewritten in the new shape on the next mutation, never by a read.
     for (const entry of parsed.entries) {
@@ -547,6 +560,7 @@ export class Ledger {
         await fh.close();
       }
       await rename(tmp, this.filePath);
+      knownFiles.add(this.#key);
     } catch (err) {
       await rm(tmp, { force: true });
       throw err;
