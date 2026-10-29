@@ -160,7 +160,7 @@ export class Ledger {
       utcDay(intent.createdAt); // validates createdAt
       const at = this.#now().toISOString();
       const entry: LedgerEntry = { intent: structuredClone(intent), decisions: [], recordedAt: at, updatedAt: at };
-      const { decision, actor } = decide(stateFor(file, entry.intent));
+      const { decision, actor } = decide(stateFor(file, entry.intent, this.#now()));
       this.#applyDecision(entry, decision, actor);
       file.entries.push(entry);
       return { entry, created: true };
@@ -205,7 +205,7 @@ export class Ledger {
     return this.#mutate((file) => {
       const entry = find(file, intentId);
       assertDecidable(entry, options.ifStatus);
-      const { decision, actor } = decide(stateFor(file, entry.intent), structuredClone(entry));
+      const { decision, actor } = decide(stateFor(file, entry.intent, this.#now()), structuredClone(entry));
       this.#applyDecision(entry, decision, actor);
       return entry;
     });
@@ -293,7 +293,7 @@ export class Ledger {
 
   /**
    * Sum of counted amounts (see countsTowardDailyTotal) for `agentId` on a UTC
-   * day. `day` is a Date, an ISO timestamp, or "YYYY-MM-DD"; default is today
+   * day, bucketed by server time (see accountingDay), not intent.createdAt. `day` is a Date, an ISO timestamp, or "YYYY-MM-DD"; default is today
    * (UTC) per the injected clock. Pass `currency` (case-insensitive) to sum only
    * that currency, which is what policy limits use; without it every currency is
    * added together (legacy behavior, only meaningful for single-currency ledgers).
@@ -311,7 +311,7 @@ export class Ledger {
     const file = await this.load();
     const totals: Record<string, number> = {};
     for (const e of file.entries) {
-      if (e.intent.agentId === agentId && utcDay(e.intent.createdAt) === target && countsTowardDailyTotal(e)) {
+      if (e.intent.agentId === agentId && countsTowardDailyTotal(e) && accountingDay(e) === target) {
         const c = normalizeCurrency(e.intent.currency);
         totals[c] = (totals[c] ?? 0) + e.intent.amount;
       }
@@ -320,11 +320,12 @@ export class Ledger {
   }
 
   /**
-   * LedgerState for evaluating `intent`: the total for its agent, in its currency,
-   * on the UTC day of intent.createdAt, excluding the intent itself if already recorded.
+   * LedgerState for evaluating `intent` now: the total for its agent, in its currency,
+   * on today's UTC day per the injected server clock (see accountingDay), excluding
+   * the intent itself if already recorded. intent.createdAt is NOT used (client-supplied).
    */
   async ledgerStateFor(intent: PaymentIntent): Promise<LedgerState> {
-    return stateFor(await this.load(), intent);
+    return stateFor(await this.load(), intent, this.#now());
   }
 
   #serialize<T>(fn: () => Promise<T>): Promise<T> {
@@ -583,8 +584,19 @@ export function normalizeCurrency(currency: string): string {
   return String(currency).toUpperCase();
 }
 
-function stateFor(file: LedgerFile, intent: PaymentIntent): LedgerState {
-  const day = utcDay(intent.createdAt);
+/**
+ * UTC day an entry's spend is accounted to, from server-side times only: the time of
+ * its latest 'approved' decision record, else recordedAt, else (files from before
+ * server timestamps existed) intent.createdAt.
+ */
+export function accountingDay(entry: LedgerEntry): string {
+  let approvedAt: string | undefined;
+  for (const d of entry.decisions ?? []) if (d.status === 'approved' && d.at !== undefined) approvedAt = d.at;
+  return utcDay(approvedAt ?? entry.recordedAt ?? entry.intent.createdAt);
+}
+
+function stateFor(file: LedgerFile, intent: PaymentIntent, now: Date): LedgerState {
+  const day = utcDay(now);
   const currency = normalizeCurrency(intent.currency);
   let total = 0;
   for (const e of file.entries) {
@@ -592,8 +604,8 @@ function stateFor(file: LedgerFile, intent: PaymentIntent): LedgerState {
       e.intent.id !== intent.id &&
       e.intent.agentId === intent.agentId &&
       normalizeCurrency(e.intent.currency) === currency &&
-      utcDay(e.intent.createdAt) === day &&
-      countsTowardDailyTotal(e)
+      countsTowardDailyTotal(e) &&
+      accountingDay(e) === day
     ) {
       total += e.intent.amount;
     }

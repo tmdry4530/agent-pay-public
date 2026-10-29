@@ -12,7 +12,7 @@ export type {
 } from './types.ts';
 export type { PaymentAdapter } from './adapter.ts';
 export { DEFAULT_CURRENCY, ReasonCode, evaluate, policyProblem, reasonCode } from './policy.ts';
-export { DEFAULT_LOCK_TIMEOUT_MS, LOCK_STALE_MS, Ledger, LedgerError, countsTowardDailyTotal, normalizeCurrency, utcDay } from './ledger.ts';
+export { DEFAULT_LOCK_TIMEOUT_MS, LOCK_STALE_MS, Ledger, accountingDay, LedgerError, countsTowardDailyTotal, normalizeCurrency, utcDay } from './ledger.ts';
 export type { LedgerEntry, LedgerErrorCode, LedgerFile, LedgerOptions, PaymentStatus, ReceiptResolution } from './ledger.ts';
 export { resolveIntent, RESOLVE_STATUSES } from './resolve.ts';
 export type { ResolveInput, ResolveResult, ResolveStatus } from './resolve.ts';
