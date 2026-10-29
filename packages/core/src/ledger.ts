@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { LedgerError } from './errors.ts';
 import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
 
@@ -106,6 +106,8 @@ export class Ledger {
   readonly #now: () => Date;
   readonly #key: string;
   readonly #lockTimeoutMs: number;
+  /** Set once stale `<file>.*.tmp` files have been swept under the lock (F13). */
+  #swept = false;
 
   constructor(options: LedgerOptions) {
     this.filePath = options.filePath;
@@ -116,6 +118,7 @@ export class Ledger {
 
   /** Reads the ledger, creating an empty file when it does not exist. */
   load(): Promise<LedgerFile> {
+    if (!this.#swept) return this.#serialize(() => this.#withFileLock(() => this.#read(true)));
     return this.#serialize(() => this.#read());
   }
 
@@ -368,9 +371,40 @@ export class Ledger {
       }
     }
     try {
+      if (!this.#swept) {
+        await this.#sweepStaleTmpFiles();
+        this.#swept = true;
+      }
       return await fn();
     } finally {
       await rm(lockPath, { force: true });
+    }
+  }
+
+  /**
+   * Removes `<file>.<pid>.<ts>.<rand>.tmp` files left by writers that died between
+   * writing and renaming. Called with the lock held; a tmp file is removed when its
+   * pid is dead or it is older than LOCK_STALE_MS. Best-effort: errors are ignored.
+   */
+  async #sweepStaleTmpFiles(): Promise<void> {
+    const dir = dirname(this.filePath);
+    const prefix = `${basename(this.filePath)}.`;
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!name.startsWith(prefix) || !name.endsWith('.tmp')) continue;
+      const pid = Number(name.slice(prefix.length).split('.')[0]);
+      const path = join(dir, name);
+      try {
+        const old = Date.now() - (await stat(path)).mtimeMs > LOCK_STALE_MS;
+        if (old || (Number.isInteger(pid) && pid > 0 && !pidAlive(pid))) await rm(path, { force: true });
+      } catch {
+        // vanished or unreadable: leave it
+      }
     }
   }
 
@@ -402,12 +436,19 @@ export class Ledger {
     await mkdir(dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.${process.pid}.${Date.now()}.${randomBytes(4).toString('hex')}.tmp`;
     try {
-      await writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8');
+      const fh = await open(tmp, 'w');
+      try {
+        await fh.writeFile(JSON.stringify(file, null, 2) + '\n', 'utf8');
+        await fh.sync(); // data on disk before the rename makes it visible
+      } finally {
+        await fh.close();
+      }
       await rename(tmp, this.filePath);
     } catch (err) {
       await rm(tmp, { force: true });
       throw err;
     }
+    await syncDir(dirname(this.filePath));
   }
 }
 
@@ -425,11 +466,29 @@ async function lockIsStale(lockPath: string): Promise<boolean> {
   const pid = Number.parseInt(content, 10);
   if (!Number.isInteger(pid) || pid <= 0) return false; // being written right now
   if (pid === process.pid) return false;
+  return !pidAlive(pid);
+}
+
+/** False only when the pid certainly does not exist (EPERM means alive, other user). */
+function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return false;
+    return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ESRCH';
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/** fsync a directory so a completed rename survives power loss. Best-effort (unsupported on some platforms). */
+async function syncDir(dir: string): Promise<void> {
+  let fh;
+  try {
+    fh = await open(dir, 'r');
+    await fh.sync();
+  } catch {
+    // e.g. EISDIR/EPERM on Windows: nothing more we can do
+  } finally {
+    await fh?.close().catch(() => undefined);
   }
 }
 
