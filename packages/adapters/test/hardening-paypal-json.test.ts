@@ -1,6 +1,6 @@
 /**
- * H4 — PayPal payout JSON parse failures must not throw from pay(); unknown outcomes carry manual-resolve meta.
- * Reuses the fetch-mock pattern from packages/adapters/test/paypal.test.ts (no network).
+ * H4 — PayPal payout JSON parse failures must not throw from pay().
+ * POST-path bad JSON -> empty externalId + needsManualResolve; duplicate GET bad JSON -> batch id, unknownOutcome only.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -102,7 +102,7 @@ describe('H4 — malformed PayPal JSON on pay()', () => {
     assert.ok(errors.length > 0);
   });
 
-  it('duplicate batch GET 200 with non-JSON body -> pending, no throw, manual-resolve meta', async () => {
+  it('duplicate batch GET 200 with non-JSON body -> pending, batch id, unknownOutcome, no needsManualResolve, onError', async () => {
     const errors: unknown[] = [];
     const batchId = 'BATCH-NONJSON-GET';
     const { fetchMock } = createFetchMock([
@@ -135,7 +135,7 @@ describe('H4 — malformed PayPal JSON on pay()', () => {
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.externalId, batchId);
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
-    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, undefined);
     assert.ok(errors.length > 0);
   });
 });

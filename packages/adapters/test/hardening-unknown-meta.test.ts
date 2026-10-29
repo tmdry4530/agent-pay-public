@@ -1,6 +1,7 @@
 /**
- * A1 — Every pay() receipt with meta.unknownOutcome === 'true' must also set meta.needsManualResolve === 'true'.
- * Covers NEAR unknown send / catch paths and PayPal getPayoutBatch unknownOutcome paths (fake clients only).
+ * A1 — meta.needsManualResolve === 'true' when uncertain outcome cannot be settled by status polling
+ * (empty externalId), or multi-item batch mismatch (covered elsewhere). With a pollable externalId,
+ * only unknownOutcome is set. Fake clients only.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -70,18 +71,31 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('A1 — NEAR pay() unknownOutcome receipts', () => {
-  it('unknown send result includes needsManualResolve', async () => {
+  it('unknown send result with txHash -> unknownOutcome only, no needsManualResolve', async () => {
     const adapter = createNearAdapter({
       client: nearClient(() => ({ kind: 'unknown', txHash: 'tx-unk', error: 'timeout' })),
       now: () => AT,
     });
     const receipt = await adapter.pay(nearIntent());
     assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.externalId, 'tx-unk');
+    assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, undefined);
+  });
+
+  it('unknown send result without txHash -> needsManualResolve', async () => {
+    const adapter = createNearAdapter({
+      client: nearClient(() => ({ kind: 'unknown', txHash: '', error: 'timeout' })),
+      now: () => AT,
+    });
+    const receipt = await adapter.pay(nearIntent());
+    assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.externalId, '');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
   });
 
-  it('send throw includes needsManualResolve', async () => {
+  it('send throw (empty externalId) -> needsManualResolve', async () => {
     const adapter = createNearAdapter({
       client: nearClient(() => {
         throw new Error('rpc down');
@@ -90,13 +104,14 @@ describe('A1 — NEAR pay() unknownOutcome receipts', () => {
     });
     const receipt = await adapter.pay(nearIntent());
     assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.externalId, '');
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
     assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
   });
 });
 
-describe('A1 — PayPal getPayoutBatch unknownOutcome receipts', () => {
-  it('duplicate lookup GET non-2xx includes needsManualResolve', async () => {
+describe('A1 — PayPal getPayoutBatch unknownOutcome with batch id', () => {
+  it('duplicate lookup GET non-2xx -> unknownOutcome only, no needsManualResolve', async () => {
     const batchId = 'BATCH-A1-404';
     const { fetchMock } = createFetchMock([
       {
@@ -111,6 +126,7 @@ describe('A1 — PayPal getPayoutBatch unknownOutcome receipts', () => {
           jsonResponse(
             {
               name: 'USER_BUSINESS_ERROR',
+              message: 'sender_batch_id already used',
               links: [{ href: `${BASE}/v1/payments/payouts/${batchId}`, rel: 'self' }],
             },
             400,
@@ -139,11 +155,12 @@ describe('A1 — PayPal getPayoutBatch unknownOutcome receipts', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
     });
     assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.externalId, batchId);
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
-    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, undefined);
   });
 
-  it('duplicate lookup GET network error includes needsManualResolve', async () => {
+  it('duplicate lookup GET network error -> unknownOutcome only, no needsManualResolve', async () => {
     const batchId = 'BATCH-A1-NET';
     const { fetchMock } = createFetchMock([
       {
@@ -158,6 +175,7 @@ describe('A1 — PayPal getPayoutBatch unknownOutcome receipts', () => {
           jsonResponse(
             {
               name: 'USER_BUSINESS_ERROR',
+              message: 'duplicate sender_batch_id',
               links: [{ href: `${BASE}/v1/payments/payouts/${batchId}`, rel: 'self' }],
             },
             400,
@@ -188,7 +206,8 @@ describe('A1 — PayPal getPayoutBatch unknownOutcome receipts', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
     });
     assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.externalId, batchId);
     assert.equal(receiptMeta(receipt)?.unknownOutcome, 'true');
-    assert.equal(receiptMeta(receipt)?.needsManualResolve, 'true');
+    assert.equal(receiptMeta(receipt)?.needsManualResolve, undefined);
   });
 });
