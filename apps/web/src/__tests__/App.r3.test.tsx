@@ -102,7 +102,10 @@ describe('App r3 resolve and race banners', () => {
     const user = await runNeedsCheckScenario(client);
     await user.click(screen.getByTestId('btn-resolve-submit'));
     expect(await screen.findByTestId('resolve-error-status')).toBeInTheDocument();
-    expect(screen.getByTestId('resolve-error-note')).toBeInTheDocument();
+    expect(screen.getByTestId('resolve-error-note')).toHaveTextContent('Note is required for the audit record');
+    expect(screen.getByTestId('resolve-note-hint')).toHaveTextContent(/audit record/);
+    expect(screen.getByTestId('resolve-note')).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByTestId('resolve-note').getAttribute('aria-describedby')).toContain('resolve-note-hint');
     expect(screen.getByTestId('resolve-error-resolvedBy')).toBeInTheDocument();
     expect(screen.getByTestId('resolve-status-succeeded')).toHaveFocus();
     expect(resolveSpy).not.toHaveBeenCalled();

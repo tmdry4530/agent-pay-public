@@ -166,9 +166,13 @@ export function ResolveForm({
           value={note}
           onChange={(e) => setNote(e.target.value)}
           disabled={submitting}
-          aria-describedby={errorIds('note')}
+          aria-describedby={['resolve-note-hint', errorIds('note')].filter(Boolean).join(' ')}
           aria-invalid={fieldErrors.note ? true : undefined}
+          aria-required="true"
         />
+        <p id="resolve-note-hint" className="hint resolve-field__hint" data-testid="resolve-note-hint">
+          Required: the note is kept in the audit record with who resolved it.
+        </p>
         {fieldErrors.note && (
           <p id="resolve-error-note-msg" className="field-error" data-testid="resolve-error-note">
             {fieldErrors.note}

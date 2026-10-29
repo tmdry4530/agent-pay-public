@@ -166,7 +166,7 @@ export function validateResolveRequest(input: {
 
   const note = typeof input.note === 'string' ? input.note.trim() : '';
   if (!note) {
-    errors.note = 'Note is required';
+    errors.note = 'Note is required for the audit record';
   } else if (note.length > 1000) {
     errors.note = 'Note must be at most 1000 characters';
   }
