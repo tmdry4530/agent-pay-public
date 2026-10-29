@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util';
 import type { PaymentAdapter } from './adapter.ts';
 import { LedgerError } from './errors.ts';
 import type { Ledger, LedgerEntry, PaymentOutcome } from './ledger.ts';
@@ -340,8 +339,37 @@ function receiptMismatch(receipt: Receipt, intent: PaymentIntent, adapter: Payme
   return undefined;
 }
 
+/**
+ * Whether two intents describe the same payment, for idempotent replay (F14). Ignores
+ * properties whose value is undefined, compares `createdAt` by instant (so
+ * "…T10:00:00Z", "…T10:00:00.000Z" and "…T19:00:00+09:00" are equal) and `currency`
+ * case-insensitively; every other property must be strictly equal (JSON-equal for
+ * non-primitive extras). Browser-safe.
+ */
+export function sameIntent(a: PaymentIntent, b: PaymentIntent): boolean {
+  const defined = (o: object) => Object.keys(o).filter((k) => (o as Record<string, unknown>)[k] !== undefined).sort();
+  const keysA = defined(a);
+  const keysB = defined(b);
+  if (keysA.length !== keysB.length || keysA.some((k, i) => k !== keysB[i])) return false;
+  for (const key of keysA) {
+    const x = (a as unknown as Record<string, unknown>)[key];
+    const y = (b as unknown as Record<string, unknown>)[key];
+    if (key === 'createdAt' && typeof x === 'string' && typeof y === 'string') {
+      const tx = Date.parse(x);
+      if (Number.isNaN(tx) || tx !== Date.parse(y)) return false;
+    } else if (key === 'currency' && typeof x === 'string' && typeof y === 'string') {
+      if (x.trim().toUpperCase() !== y.trim().toUpperCase()) return false;
+    } else if (x !== null && y !== null && typeof x === 'object' && typeof y === 'object') {
+      if (JSON.stringify(x) !== JSON.stringify(y)) return false;
+    } else if (!Object.is(x, y)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function replay(entry: LedgerEntry, intent: PaymentIntent): PaymentResult {
-  if (!isDeepStrictEqual(entry.intent, intent)) {
+  if (!sameIntent(entry.intent, intent)) {
     throw new PaymentError('intent_conflict', `intent ${intent.id} is already recorded with different content`);
   }
   const { decision } = entry;

@@ -16,7 +16,7 @@ export { DEFAULT_LOCK_TIMEOUT_MS, LOCK_STALE_MS, Ledger, accountingDay, LedgerEr
 export type { LedgerEntry, LedgerErrorCode, LedgerFile, LedgerOptions, PaymentOutcome, PaymentStatus, PaymentSubmission, ReceiptResolution } from './ledger.ts';
 export { resolveIntent, RESOLVE_STATUSES } from './resolve.ts';
 export type { ResolveInput, ResolveResult, ResolveStatus } from './resolve.ts';
-export { FailureCode, PaymentError, approve, reject, runPayment } from './orchestrator.ts';
+export { FailureCode, PaymentError, approve, reject, runPayment, sameIntent } from './orchestrator.ts';
 export type { ApproveOptions, PaymentErrorCode, PaymentOptions, PaymentResult, RejectOptions, RunStatus } from './orchestrator.ts';
 export { reconcile, refreshIntent } from './reconcile.ts';
 export type { ReconcileSummary, RefreshResult, StatusOptions } from './reconcile.ts';

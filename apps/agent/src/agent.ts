@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { LedgerEntry, PaymentResult, Receipt } from '@agent-pay/core';
 import { ApiClientError, getHealth, getLedger, getRail, postApprove, postIntent, postRefresh, type RailInfo } from './client.ts';
 import { createPlanner, type Planner, type Quote } from './planner.ts';
@@ -13,6 +14,7 @@ export type AgentStep =
   | 'quote'
   | 'rail'
   | 'submit_intent'
+  | 'submit_retry'
   | 'intent_result'
   | 'await_approval'
   | 'auto_approve'
@@ -75,6 +77,18 @@ export interface RunAgentOptions {
   healthCheck?: boolean;
   /** Expected server rail (CLI --rail). If GET /health reports a different rail, finish 'error' (exit 1). */
   expectedRail?: string;
+  /**
+   * Intent id for this run. Default: generated once per run (`pi_<uuid>`). The same id and
+   * createdAt are resent on every POST /intents retry, so a retry after a lost response or
+   * timeout replays the stored outcome instead of paying twice (F14).
+   */
+  intentId?: string;
+  /** Total POST /intents attempts on retryable errors (timeout, dropped connection, 5xx). Default 3. */
+  submitAttempts?: number;
+  /** Pause between POST /intents attempts. Default 500. */
+  submitRetryDelayMs?: number;
+  /** Per-attempt POST /intents timeout. Default SUBMIT_TIMEOUT_MS (70000). */
+  submitTimeoutMs?: number;
 }
 
 export interface RunAgentResult {
@@ -320,36 +334,67 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
     return fail(err);
   }
 
-  // 2. Submit the intent.
-  let created: Awaited<ReturnType<typeof postIntent>>;
-  try {
-    step('submit_intent', `POST ${options.apiUrl.replace(/\/+$/, '')}/intents as ${options.agentId}`, {
-      agentId: options.agentId,
-    });
-    created = await postIntent(options.apiUrl, {
-      agentId: options.agentId,
-      payee,
-      amount,
-      currency,
-      purpose: quote.purpose,
-    });
-  } catch (err) {
-    return fail(err);
-  }
-  ctx.intentId = created.intent.id;
-  step('intent_result', `${created.status}: ${created.error ?? created.decision.reason}`, {
-    apiStatus: created.status,
-    reason: created.decision.reason,
+  // 2. Submit the intent. The id is fixed once per run and every retry resends the identical
+  //    body, so the server replays the stored outcome instead of paying twice (F14). createdAt
+  //    is left to the server clock (it is for the record only); if an earlier attempt was
+  //    recorded with another server timestamp the retry gets 409 intent_conflict, which (like
+  //    in_progress) means "already submitted": the outcome is read from the ledger.
+  const body = {
+    agentId: options.agentId,
+    payee,
+    amount,
+    currency,
+    purpose: quote.purpose,
+    id: options.intentId ?? `pi_${randomUUID()}`,
+  };
+  const intentId = body.id;
+  ctx.intentId = intentId;
+  const attempts = Math.max(1, Math.floor(options.submitAttempts ?? 3));
+  let created: Awaited<ReturnType<typeof postIntent>> | undefined;
+  let mayHaveReached = false;
+  step('submit_intent', `POST ${options.apiUrl.replace(/\/+$/, '')}/intents as ${options.agentId}`, {
+    agentId: options.agentId,
   });
-  const immediate = fromPayment(created);
-  if (immediate === 'await_receipt') return awaitReceiptSettlement(created.intent.id);
-  if (immediate) return immediate;
+  for (let attempt = 1; created === undefined; attempt++) {
+    try {
+      created = await postIntent(options.apiUrl, body, options.submitTimeoutMs);
+    } catch (err) {
+      // An earlier attempt may still be running on the server: read the outcome from the ledger.
+      if (
+        mayHaveReached &&
+        err instanceof ApiClientError &&
+        err.status === 409 &&
+        (err.message.startsWith('in_progress') || err.message.startsWith('intent_conflict'))
+      ) {
+        step('intent_result', `${err.message}; reading the outcome from the ledger`, { httpStatus: 409 });
+        break;
+      }
+      if (!(err instanceof ApiClientError && err.retryable) || attempt >= attempts) return fail(err);
+      mayHaveReached = true;
+      step('submit_retry', `attempt ${attempt}/${attempts} failed (${err.message}); resending intent ${intentId}`, {
+        attempt,
+        attempts,
+        error: err.message,
+      });
+      await sleep(options.submitRetryDelayMs ?? 500);
+    }
+  }
+  if (created) {
+    step('intent_result', `${created.status}: ${created.error ?? created.decision.reason}`, {
+      apiStatus: created.status,
+      reason: created.decision.reason,
+    });
+    const immediate = fromPayment(created);
+    if (immediate === 'await_receipt') return awaitReceiptSettlement(intentId);
+    if (immediate) return immediate;
+  }
 
   // 3. needs_approval: wait for a human (or simulate one).
-  const intentId = created.intent.id;
   step(
     'await_approval',
-    options.autoApproveAs
+    !created
+      ? `waiting for the outcome of intent ${intentId} (submitted by an earlier attempt; timeout ${timeoutMs}ms, poll ${pollMs}ms)`
+      : options.autoApproveAs
       ? `waiting for human approval (simulated by --auto-approve-as "${options.autoApproveAs}")`
       : `waiting for human approval: POST /intents/${intentId}/approve (timeout ${timeoutMs}ms, poll ${pollMs}ms)`,
     { timeoutMs, pollMs, autoApproveAs: options.autoApproveAs },
@@ -357,7 +402,7 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
 
   const deadline = Date.now() + timeoutMs;
 
-  if (options.autoApproveAs) {
+  if (options.autoApproveAs && created) {
     if (options.approveDelayMs) await sleep(options.approveDelayMs);
     step('auto_approve', `simulated human "${options.autoApproveAs}" calls POST /intents/${intentId}/approve`, {
       approver: options.autoApproveAs,

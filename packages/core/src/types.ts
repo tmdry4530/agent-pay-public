@@ -11,7 +11,10 @@ export interface PaymentIntent {
   amount: number;
   currency: Currency;
   purpose: string;
-  /** ISO 8601 timestamp. Its UTC date decides which day the intent counts toward. */
+  /**
+   * ISO 8601 timestamp, client-supplied and kept for the record only: the daily limit
+   * buckets by the server clock (F2). Replays compare it by instant (F14).
+   */
   createdAt: string;
 }
 
