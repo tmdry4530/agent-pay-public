@@ -1,6 +1,6 @@
 import type { Policy, Rail } from '@agent-pay/core';
 import { isAcceptedPayee, isValidEmail } from '@agent-pay/adapters';
-import { DEFAULT_POLICY } from './app.ts';
+import { DEFAULT_POLICY } from './policy-defaults.ts';
 import { AdapterConfigError } from './adapters.ts';
 
 /** Logical planner payee names used in demo scenarios. */

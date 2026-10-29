@@ -34,6 +34,8 @@ At startup, `railSeed(RAIL, process.env)` selects policy limits, currency, amoun
 `policy.allowedPayees` is the de-duplicated list of rail addresses (insertion order). The agent reads `GET /rail` to map planner logical payees and scale USD quote amounts (e.g. scenario `small` 10 USD → 0.1 NEAR when `amountScale` is 0.01).
 
 ## Policy
+Seed scripts and tooling can import `DEFAULT_POLICY` from `apps/api/src/policy-defaults.ts` (side-effect free; no server or ledger I/O).
+
 Kept **in memory** (one policy, one agent), seeded from `railSeed` (mock uses exported `DEFAULT_POLICY` unchanged):
 `PUT /policy` replaces it until restart. After the JSON shape check, the next policy is passed to core `policyProblem` with `{ dailyTotal: 0 }`. A problem is `400 {"error":"invalid_policy","message":"<problem>"}` and the active policy is left unchanged. The ledger is on disk; the policy is not.
 

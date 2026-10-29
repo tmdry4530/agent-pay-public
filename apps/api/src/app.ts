@@ -20,16 +20,9 @@ import {
 } from '@agent-pay/core';
 import { ValidationError, parseDecisionBody, parseIdempotencyKey, parseIntentBody, parsePolicy } from './validate.ts';
 import { resolveRoute } from './resolve-route.ts';
+import { DEFAULT_POLICY } from './policy-defaults.ts';
 
-/** Seed policy for demos. Replace at runtime with PUT /policy. */
-export const DEFAULT_POLICY: Policy = {
-  agentId: 'demo-agent',
-  perTxMax: 100,
-  dailyMax: 200,
-  allowedPayees: ['openai-api', 'anthropic-api', 'vercel', 'near-compute'],
-  requireApprovalAbove: 50,
-  currency: 'USD',
-};
+export { DEFAULT_POLICY } from './policy-defaults.ts';
 
 /** Max request body size in bytes. */
 export const MAX_BODY_BYTES = 64 * 1024;
