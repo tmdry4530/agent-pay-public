@@ -626,7 +626,7 @@ export default function App() {
                 </ActionButton>
               )}
               {refreshNote && (
-                <p className="refresh-note" data-testid="refresh-note">
+                <p className="refresh-note" data-testid="refresh-note" role="status" aria-live="polite">
                   {refreshNote}
                 </p>
               )}

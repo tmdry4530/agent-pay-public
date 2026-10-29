@@ -129,7 +129,7 @@
 }
 
 .scenario-card .amount {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -437,7 +437,7 @@ dd {
 
 .ledger-type {
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   text-transform: lowercase;
 }
 

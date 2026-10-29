@@ -9,6 +9,8 @@
   --muted: #9aa8c0;
   --accent: #3d6fd9;
   --accent-dim: #2f5aa8;
+  --accent-text: #7aa2ff;
+  --focus: #7aa2ff;
   --success: #2db872;
   --danger: #e85c66;
   --warn: #d4a017;
@@ -45,7 +47,7 @@ button {
 button:focus-visible,
 .scenario-card:focus-visible,
 .rail-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 

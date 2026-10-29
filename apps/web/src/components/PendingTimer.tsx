@@ -18,7 +18,7 @@ export function PendingTimer({ sinceIso }: Props) {
 
   return (
     <>
-      <p className="pending-elapsed" data-testid="pending-elapsed" aria-live="off">
+      <p className="pending-elapsed" data-testid="pending-elapsed" role="status" aria-live="polite">
         {formatPendingElapsed(sinceIso, now)}
       </p>
       {showSlow && (
