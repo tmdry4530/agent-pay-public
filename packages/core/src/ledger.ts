@@ -3,7 +3,7 @@ import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promis
 import { basename, dirname, join, resolve } from 'node:path';
 import { LedgerError } from './errors.ts';
 import { ceilMinorUnits, currencyDecimals } from './money.ts';
-import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
+import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt, ReceiptStatus } from './types.ts';
 
 export type PaymentStatus = 'paid' | 'failed';
 
@@ -170,8 +170,9 @@ export class Ledger {
 
   /**
    * Records a decision: sets `decision` to it and appends it to `decisions` with
-   * `at` (injected clock) and `options.actor` when given. A new decision is allowed
-   * until a payment is recorded, e.g. needs_approval -> approved after a human approves.
+   * `at` (injected clock) and `options.actor` when given. Allowed transitions: none →
+   * any, needs_approval → approved/rejected (approved/rejected are final), and only
+   * before a payment is recorded. Others throw LedgerError precondition_failed.
    *
    * `options.ifStatus` makes the write conditional: it throws unless the current
    * decision status equals it (compare-and-set within this instance's write queue).
@@ -213,6 +214,7 @@ export class Ledger {
   }
 
   #applyDecision(entry: LedgerEntry, decision: Decision, actor: string | undefined): void {
+    assertDecisionTransition(entry, decision.status);
     const at = this.#now().toISOString();
     entry.decision = { status: decision.status, reason: decision.reason };
     const record: DecisionRecord = { ...entry.decision, at };
@@ -273,9 +275,11 @@ export class Ledger {
   }
 
   /**
-   * Attaches a receipt. Requires a recorded payment. May be called again to
-   * replace the receipt (e.g. a refund receipt). Pending receipts should be
-   * settled via `settleReceipt` so concurrent updates are guarded.
+   * Attaches a receipt. Requires a recorded payment. The first receipt must agree with
+   * the payment (any but 'refunded' when paid, a 'failed' receipt marking the payment
+   * failed; only 'failed' when failed); afterwards the
+   * only replacement allowed is a refund of a succeeded receipt. Pending receipts are
+   * settled via `settleReceipt`. Anything else throws LedgerError precondition_failed.
    */
   recordReceipt(intentId: string, receipt: Receipt): Promise<LedgerEntry> {
     return this.#mutate((file) => {
@@ -286,7 +290,9 @@ export class Ledger {
       if (entry.paymentStatus === undefined) {
         throw new LedgerError('precondition_failed', `intent ${intentId} has no payment recorded`);
       }
+      assertReceiptTransition(entry, receipt.status);
       entry.receipt = { ...receipt };
+      if (receipt.status === 'failed') entry.paymentStatus = 'failed'; // keep payment and receipt consistent
       entry.updatedAt = this.#now().toISOString();
       return entry;
     });
@@ -578,6 +584,36 @@ function assertDecidable(entry: LedgerEntry, ifStatus: DecisionStatus | undefine
   if (ifStatus !== undefined && entry.decision?.status !== ifStatus) {
     throw new LedgerError('precondition_failed', `intent ${intentId} decision is ${entry.decision?.status ?? 'missing'}, expected ${ifStatus}`);
   }
+}
+
+/**
+ * Decision transition table (F15): undecided → any status; needs_approval → approved or
+ * rejected; approved and rejected are final.
+ */
+function assertDecisionTransition(entry: LedgerEntry, next: DecisionStatus): void {
+  const current = entry.decision?.status;
+  if (current === undefined) return;
+  if (current === 'needs_approval' && (next === 'approved' || next === 'rejected')) return;
+  throw new LedgerError('precondition_failed', `intent ${entry.intent.id} cannot change decision ${current} → ${next}`);
+}
+
+/**
+ * Receipt rules for recordReceipt (F15). First receipt: 'succeeded', 'pending' or
+ * 'failed' on a 'paid' payment (failed also flips paymentStatus to 'failed'), only
+ * 'failed' on a 'failed' payment. Afterwards only a refund of a
+ * succeeded receipt ('succeeded' → 'refunded'); pending receipts go through settleReceipt.
+ */
+function assertReceiptTransition(entry: LedgerEntry, next: ReceiptStatus): void {
+  const id = entry.intent.id;
+  const current = entry.receipt?.status;
+  if (current === undefined) {
+    const ok = entry.paymentStatus === 'failed' ? next === 'failed' : next !== 'refunded';
+    if (!ok) throw new LedgerError('precondition_failed', `intent ${id} payment is ${entry.paymentStatus}; first receipt cannot be ${next}`);
+    return;
+  }
+  if (current === 'succeeded' && next === 'refunded') return;
+  const hint = current === 'pending' ? ' (use settleReceipt for pending receipts)' : '';
+  throw new LedgerError('precondition_failed', `intent ${id} receipt cannot change ${current} → ${next}${hint}`);
 }
 
 /** Currency key used for per-currency totals: upper-cased (same comparison evaluate uses). */
