@@ -1,8 +1,42 @@
-import type { LedgerEntry } from '@agent-pay/core';
+import type { DecisionRecord, LedgerEntry } from '@agent-pay/core';
+import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
+import { reasonInfo, showReasonLabelForDecision } from '../data/compat';
 import { deriveIntentFlow, compactStageIcon } from '../data/intentFlow';
 
 function formatMoney(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
+}
+
+function decisionRecords(entry: LedgerEntry): DecisionRecord[] {
+  if (entry.decisions.length > 0) return entry.decisions;
+  if (entry.decision) {
+    return [{ ...entry.decision, at: entry.updatedAt }];
+  }
+  return [];
+}
+
+function policyReason(entry: LedgerEntry): string | undefined {
+  const records = decisionRecords(entry);
+  const policy = records.find(
+    (r) =>
+      reasonCode(r) !== ReasonCode.ApprovedByHuman &&
+      reasonCode(r) !== ReasonCode.RejectedByHuman,
+  );
+  return policy?.reason;
+}
+
+function stageTooltip(stage: ReturnType<typeof deriveIntentFlow>['stages'][number], entry: LedgerEntry): string {
+  if (stage.id === 'policy') {
+    const reason = policyReason(entry);
+    if (reason) {
+      const info = reasonInfo(reason);
+      const parts = [info.label];
+      if (info.explanation) parts.push(info.explanation);
+      if (info.detail) parts.push(info.detail);
+      return parts.join(' — ');
+    }
+  }
+  return stage.detail ?? stage.label;
 }
 
 type Props = {
@@ -23,6 +57,8 @@ export function IntentFlows({ entries }: Props) {
         <ul className="intent-flow-list">
           {sorted.map((entry) => {
             const flow = deriveIntentFlow(entry);
+            const policyReasonStr = policyReason(entry);
+            const policyInfo = policyReasonStr ? reasonInfo(policyReasonStr) : null;
             return (
               <li key={entry.intent.id} data-testid="intent-flow">
                 <div className="intent-flow__header">
@@ -31,6 +67,9 @@ export function IntentFlows({ entries }: Props) {
                   </span>
                   <span className={`intent-flow__chip overall-${flow.overall}`}>
                     {flow.overallLabel}
+                    {policyInfo && showReasonLabelForDecision(policyInfo.code) && policyInfo.explanation && (
+                      <span className="sr-only"> {policyInfo.explanation}</span>
+                    )}
                   </span>
                 </div>
                 <ol className="intent-track" aria-label={`Flow for ${entry.intent.purpose}`}>
@@ -40,7 +79,7 @@ export function IntentFlows({ entries }: Props) {
                       data-stage={stage.id}
                       data-state={stage.state}
                       className={`intent-track__step state-${stage.state}`}
-                      title={stage.detail ?? stage.label}
+                      title={stageTooltip(stage, entry)}
                     >
                       <span className="intent-track__icon" aria-hidden>
                         {compactStageIcon(stage.state)}

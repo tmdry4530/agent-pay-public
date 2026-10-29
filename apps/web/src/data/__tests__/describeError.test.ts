@@ -24,6 +24,13 @@ describe('describeError', () => {
     expect(d.title).toMatch(/500/);
   });
 
+  it('classifies already processed on approve race', () => {
+    const d = describeError(new ApiError(409, 'not_pending: gone'), { action: 'approve' });
+    expect(d.kind).toBe('already_processed');
+    expect(d.title).toBe('Already processed');
+    expect(d.retryable).toBe(false);
+  });
+
   it('classifies rail_mismatch', () => {
     const d = describeError(new ApiError(409, 'rail_mismatch: wrong rail'));
     expect(d.kind).toBe('rail_mismatch');

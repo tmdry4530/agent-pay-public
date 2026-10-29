@@ -155,6 +155,11 @@ function humanizeCode(code: string): string {
     .join(' ');
 }
 
+/** Whether the Decision UI should show reason-label (avoid extra lines on happy-path codes). */
+export function showReasonLabelForDecision(code: string): boolean {
+  return code === 'invalid_policy' || !(code in REASON_LABELS);
+}
+
 /** Parses "code: detail" decision / error reasons for display. */
 export function reasonInfo(reason: string): {
   code: string;

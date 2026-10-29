@@ -627,6 +627,63 @@ dd {
   width: auto;
 }
 
+.error-banner--info {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+
+.error-banner--info .error-banner__title {
+  color: var(--accent-text);
+}
+
+.error-banner--info .error {
+  color: var(--text);
+}
+
+.reason-explanation {
+  margin: 0.25rem 0 0;
+  font-size: 0.82rem;
+}
+
+.ledger-list .ledger-item--warn {
+  border-left: 3px solid var(--warn);
+  padding-left: 0.5rem;
+  color: var(--badge-warn);
+}
+
+.totals-by-currency {
+  margin: 0.65rem 0 0;
+  font-size: 0.78rem;
+}
+
+.totals-by-currency > dt:first-of-type {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.totals-by-currency div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.15rem 0;
+}
+
+.totals-by-currency-note {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+}
+
+.intent-track__step.state-attention {
+  color: var(--badge-warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.intent-flow__chip.overall-submitting,
+.intent-flow__chip.overall-needs_manual_resolve {
+  border-color: var(--warn);
+  color: var(--badge-warn);
+}
+
 .skeleton-block {
   min-height: 4.5rem;
 }

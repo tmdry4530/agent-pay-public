@@ -112,6 +112,32 @@ describe('entriesToTimeline', () => {
     });
   });
 
+  it('includes payment submitting and manual resolve receipt events', () => {
+    const submitting = entry({
+      intent: { ...baseIntent, id: 'sub' },
+      decisions: [{ status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, at: '2026-01-01T10:00:00.000Z' }],
+      paymentStatus: 'submitting' as unknown as LedgerEntry['paymentStatus'],
+      updatedAt: '2026-01-01T10:01:00.000Z',
+    });
+    expect(entriesToTimeline([submitting]).some((e) => e.label === 'payment submitting')).toBe(true);
+
+    const manual = entry({
+      intent: { ...baseIntent, id: 'manual' },
+      decisions: [{ status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, at: '2026-01-01T10:00:00.000Z' }],
+      paymentStatus: 'paid',
+      receipt: {
+        intentId: 'manual',
+        status: 'pending',
+        rail: 'mock',
+        externalId: '',
+        at: '2026-01-01T10:02:00.000Z',
+        meta: { needsManualResolve: 'true', error: 'timeout' },
+      } as LedgerEntry['receipt'],
+    });
+    const manualEv = entriesToTimeline([manual]).find((e) => e.label === 'receipt needs manual resolution');
+    expect(manualEv?.warn).toBe(true);
+  });
+
   it('tie-breaks equal timestamps within one intent (resolution > receipt > payment > decisions > intent)', () => {
     const same = '2026-01-01T10:00:00.000Z';
     const e = entry({

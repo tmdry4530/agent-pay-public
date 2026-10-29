@@ -1,7 +1,7 @@
 import { ReasonCode } from '@agent-pay/core/policy.ts';
 import type { LedgerEntry } from '@agent-pay/core';
 import { describe, expect, it } from 'vitest';
-import { deriveIntentFlow } from '../intentFlow';
+import { deriveIntentFlow, derivePipelineSteps } from '../intentFlow';
 
 function entry(partial: Partial<LedgerEntry> & Pick<LedgerEntry, 'intent'>): LedgerEntry {
   return {
@@ -176,6 +176,47 @@ describe('deriveIntentFlow', () => {
     expect(flow.stages.find((s) => s.id === 'receipt')?.state).toBe('pending');
   });
 
+  it('submitting payment', () => {
+    const flow = deriveIntentFlow(
+      entry({
+        intent: baseIntent,
+        decisions: [
+          { status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, actor: 'policy' },
+        ],
+        paymentStatus: 'submitting' as unknown as LedgerEntry['paymentStatus'],
+      }),
+    );
+    expect(flow.overall).toBe('submitting');
+    expect(flow.overallLabel).toBe('Submitting payment');
+    expect(flow.stages.find((s) => s.id === 'payment')).toMatchObject({
+      state: 'current',
+      detail: 'submitting',
+    });
+    expect(flow.stages.find((s) => s.id === 'receipt')?.state).toBe('upcoming');
+  });
+
+  it('needs manual resolution', () => {
+    const flow = deriveIntentFlow(
+      entry({
+        intent: baseIntent,
+        decisions: [
+          { status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, actor: 'policy' },
+        ],
+        paymentStatus: 'paid',
+        receipt: {
+          intentId: 'i1',
+          status: 'pending',
+          rail: 'mock',
+          externalId: '',
+          at: '2026-01-01T12:00:02.000Z',
+          meta: { needsManualResolve: 'true' },
+        } as LedgerEntry['receipt'],
+      }),
+    );
+    expect(flow.overall).toBe('needs_manual_resolve');
+    expect(flow.stages.find((s) => s.id === 'receipt')?.state).toBe('attention');
+  });
+
   it('resolved via operator', () => {
     const flow = deriveIntentFlow(
       entry({
@@ -201,5 +242,13 @@ describe('deriveIntentFlow', () => {
       }),
     );
     expect(flow.overall).toBe('resolved');
+  });
+});
+
+describe('derivePipelineSteps', () => {
+  it('payment step is pending and current while pay is in flight', () => {
+    const steps = derivePipelineSteps('quote', null, { payInFlight: true });
+    const payment = steps.find((s) => s.step === 'payment');
+    expect(payment).toMatchObject({ state: 'pending', ariaCurrent: true });
   });
 });
