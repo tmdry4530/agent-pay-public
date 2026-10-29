@@ -11,7 +11,7 @@
 | `HOST` | `127.0.0.1` | bind address |
 | `LEDGER_PATH` | `apps/api/.data/ledger.json` (resolved from the api package, gitignored) | single writer process per file |
 | `RAIL` | `mock` | `mock` \| `paypal` (PayPal Payouts v1, sandbox) \| `near` (NEAR testnet native transfer). Missing credentials for a wired rail → exits 1 at startup with `adapter_config: …` plus `missing required env vars for RAIL=<rail>: <names>` (names only, no values, no stack trace) |
-| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit) |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?`, `PAYPAL_TIMEOUT_MS?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit). `PAYPAL_TIMEOUT_MS` — positive integer HTTP timeout in ms (default `30000`) |
 | `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK?`, `NEAR_RPC_URL?` | | only for `RAIL=near`; `NEAR_RPC_URL` defaults to `https://test.rpc.fastnear.com` on testnet |
 | `DEMO_PAYEES` | | optional for `RAIL=paypal` or `near` only: comma-separated `name=address` pairs (whitespace trimmed). When non-empty, **replaces** the default logical→address map entirely. Invalid syntax or payee for the rail → startup error `demo_payees: … (RAIL=…)`. Ignored for `mock`. |
 
