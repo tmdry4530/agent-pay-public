@@ -14,8 +14,13 @@ function mockOptionsFromUrl(): InMemoryClientOptions {
     const ms = Number(submittingMs);
     if (Number.isFinite(ms) && ms >= 0) options.payDelayMs = ms;
   }
-  if (params.get('simulateManualResolve') === '1') {
+  const manualResolve = params.get('simulateManualResolve');
+  if (manualResolve === '1') {
     options.payOutcome = 'timeout';
+  } else if (manualResolve === 'throw') {
+    options.payOutcome = 'throw';
+  } else if (manualResolve === 'mismatch') {
+    options.payOutcome = 'mismatch';
   }
   if (params.get('simulateInvalidPolicy') === '1') {
     options.invalidPolicy = true;

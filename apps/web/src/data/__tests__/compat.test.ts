@@ -3,6 +3,7 @@ import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../apiError';
 import {
+  failureInfo,
   isAlreadyProcessed,
   isSubmitting,
   isSubmittingResult,
@@ -96,6 +97,23 @@ describe('compat', () => {
 
       const unknown = reasonInfo('some_new_code: detail');
       expect(unknown.label).toBe('Some New Code');
+    });
+  });
+
+  describe('failureInfo', () => {
+    it('maps FailureCode prefixes to labels and explanations', () => {
+      const timeout = failureInfo('adapter_timeout: pay timed out after 1500ms');
+      expect(timeout.label).toBe('Rail timeout');
+      expect(timeout.explanation).toMatch(/did not answer/i);
+
+      const err = failureInfo('adapter_error: mock rail unreachable');
+      expect(err.label).toBe('Rail error');
+
+      const mismatch = failureInfo('receipt_mismatch: intentId wrong');
+      expect(mismatch.label).toBe('Receipt mismatch');
+
+      expect(failureInfo(undefined).label).toBe('Unknown outcome');
+      expect(failureInfo('custom_code: detail').label).toBe('Custom Code');
     });
   });
 

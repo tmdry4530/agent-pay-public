@@ -2,9 +2,10 @@ import type { Ledger, PaymentAdapter, Receipt } from '@agent-pay/core';
 import type { PaymentIntent, Policy, Rail } from '@agent-pay/core';
 import { approve, reject, runPayment } from '@agent-pay/core/orchestrator.ts';
 import { PaymentError } from '@agent-pay/core/orchestrator.ts';
+import { LedgerError } from '@agent-pay/core/errors.ts';
 import type { AgentPayClient, IntentDraft, LedgerSnapshot } from './agentPayClient';
 import { ApiError } from './apiError';
-import { countsTowardDailyTotal, MemoryLedger, MemoryLedgerError, utcDay } from './memoryLedger';
+import { MemoryLedger, utcDay } from './memoryLedger';
 import { refreshIntent } from './refreshIntent';
 import { createMockAdapters, type PendingSettlementConfig } from './rails/mockAdapters';
 
@@ -18,24 +19,25 @@ export const DEMO_POLICY: Policy = {
   currency: 'USD',
 };
 
-export type PayOutcome = 'normal' | 'throw' | 'timeout';
+export type PayOutcome = 'normal' | 'throw' | 'timeout' | 'mismatch';
 
 export type InMemoryClientOptions = {
   policy?: Policy;
   now?: () => Date;
   newId?: () => string;
   pendingSettlement?: PendingSettlementConfig;
-  /** Delay before adapter pay completes (exercises submitting in ledger). */
+  /** Delay before adapter pay completes (entry stays submitting meanwhile). */
   payDelayMs?: number;
   /** Simulated pay() outcome for manual-resolve demos. */
   payOutcome?: PayOutcome;
-  /** Short-circuit submit with invalid_policy rejection (no pay). */
+  /** Short-circuit with invalid_policy via core evaluate (perTxMax NaN). */
   invalidPolicy?: boolean;
+  /** Timeout for adapter.pay when using runPayment/approve (default 1500ms when payOutcome is timeout). */
+  payTimeoutMs?: number;
 };
 
 const DEFAULT_APPROVER = 'demo-operator';
-
-type ReceiptWithMeta = Receipt & { meta?: Record<string, string> };
+const DEFAULT_SIM_TIMEOUT_MS = 1500;
 
 function mapApproveRejectError(err: unknown, intentId: string): never {
   if (err instanceof PaymentError) {
@@ -44,22 +46,19 @@ function mapApproveRejectError(err: unknown, intentId: string): never {
     }
     throw err;
   }
-  if (err instanceof MemoryLedgerError && /expected needs_approval/.test(err.message)) {
+  if (err instanceof LedgerError && err.code === 'precondition_failed' && /expected needs_approval/.test(err.message)) {
     throw new ApiError(409, `not_pending: intent ${intentId} was already processed`);
   }
   throw err;
 }
 
-function wrapAdapter(
-  rail: Rail,
+function wrapAdapterPay(
   inner: PaymentAdapter,
-  ledger: MemoryLedger,
-  opts: { payDelayMs: number; payOutcome: PayOutcome; now: () => Date },
+  opts: { payDelayMs: number; payOutcome: PayOutcome },
 ): PaymentAdapter {
-  const { payDelayMs, payOutcome, now } = opts;
+  const { payDelayMs, payOutcome } = opts;
 
   const pay = async (intent: PaymentIntent): Promise<Receipt> => {
-    await ledger.markSubmitting(intent.id);
     if (payDelayMs > 0) {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, payDelayMs);
@@ -67,35 +66,18 @@ function wrapAdapter(
     }
 
     if (payOutcome === 'throw') {
-      const receipt: ReceiptWithMeta = {
-        intentId: intent.id,
-        rail,
-        externalId: '',
-        status: 'pending',
-        at: now().toISOString(),
-        meta: {
-          needsManualResolve: 'true',
-          unknownOutcome: 'true',
-          error: 'pay threw: simulated adapter error',
-        },
-      };
-      return receipt;
+      throw new Error('mock rail unreachable');
     }
 
     if (payOutcome === 'timeout') {
-      const receipt: ReceiptWithMeta = {
-        intentId: intent.id,
-        rail,
-        externalId: '',
-        status: 'pending',
-        at: now().toISOString(),
-        meta: {
-          needsManualResolve: 'true',
-          unknownOutcome: 'true',
-          error: `pay timed out after ${payDelayMs}ms`,
-        },
-      };
-      return receipt;
+      return new Promise<Receipt>(() => {
+        /* never resolves — orchestrator payTimeoutMs fires */
+      });
+    }
+
+    if (payOutcome === 'mismatch') {
+      const receipt = await inner.pay(intent);
+      return { ...receipt, intentId: `${intent.id}-wrong` };
     }
 
     return inner.pay(intent);
@@ -111,20 +93,26 @@ function wrapAdapter(
 export function createInMemoryClient(options: InMemoryClientOptions = {}): AgentPayClient {
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? (() => crypto.randomUUID());
-  const policy = options.policy ?? DEMO_POLICY;
+  const basePolicy = options.policy ?? DEMO_POLICY;
+  const invalidPolicy = options.invalidPolicy ?? false;
+  const policy: Policy = invalidPolicy ? { ...basePolicy, perTxMax: Number.NaN } : basePolicy;
   const payDelayMs = options.payDelayMs ?? 0;
   const payOutcome = options.payOutcome ?? 'normal';
-  const invalidPolicy = options.invalidPolicy ?? false;
+  const payTimeoutMs =
+    options.payTimeoutMs ?? (payOutcome === 'timeout' ? DEFAULT_SIM_TIMEOUT_MS : undefined);
+  const paymentOptions = payTimeoutMs !== undefined ? { payTimeoutMs } : {};
+
   const ledger = new MemoryLedger({ now });
   const baseAdapters = createMockAdapters({
     now,
     newId,
     pendingSettlement: options.pendingSettlement,
   });
+  const wrapOpts = { payDelayMs, payOutcome };
   const adapters: Record<Rail, PaymentAdapter> = {
-    mock: wrapAdapter('mock', baseAdapters.mock, ledger, { payDelayMs, payOutcome, now }),
-    paypal: wrapAdapter('paypal', baseAdapters.paypal, ledger, { payDelayMs, payOutcome, now }),
-    near: wrapAdapter('near', baseAdapters.near, ledger, { payDelayMs, payOutcome, now }),
+    mock: wrapAdapterPay(baseAdapters.mock, wrapOpts),
+    paypal: wrapAdapterPay(baseAdapters.paypal, wrapOpts),
+    near: wrapAdapterPay(baseAdapters.near, wrapOpts),
   };
   const railsByIntent = new Map<string, Rail>();
 
@@ -145,14 +133,10 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
   async function ledgerSnapshot(): Promise<LedgerSnapshot> {
     const entries = await ledger.list();
     const day = utcDay(now());
+    const agentIds = [...new Set(entries.map((e) => e.intent.agentId))];
     const totals: Record<string, Record<string, number>> = {};
-    for (const e of entries) {
-      if (utcDay(e.intent.createdAt) === day && countsTowardDailyTotal(e)) {
-        const agent = e.intent.agentId;
-        const cur = String(e.intent.currency).toUpperCase();
-        if (!totals[agent]) totals[agent] = {};
-        totals[agent][cur] = (totals[agent][cur] ?? 0) + e.intent.amount;
-      }
+    for (const agentId of agentIds) {
+      totals[agentId] = await ledger.dailyTotals(agentId, day);
     }
     return { entries, today: { day, totals } };
   }
@@ -161,22 +145,13 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
     kind: 'mock',
 
     async getPolicy() {
-      return structuredClone(policy);
+      return structuredClone(basePolicy);
     },
 
     async submitIntent(draft: IntentDraft, rail: Rail) {
       const intent = buildIntent(draft);
       railsByIntent.set(intent.id, rail);
-
-      if (invalidPolicy) {
-        const reason = 'invalid_policy: policy.perTxMax is not a finite number';
-        await ledger.recordIntent(intent);
-        const decision = { status: 'rejected' as const, reason };
-        await ledger.recordDecision(intent.id, decision, { actor: 'policy' });
-        return { intentId: intent.id, status: 'rejected', decision, intent };
-      }
-
-      const result = await runPayment(intent, policy, asCoreLedger, adapters[rail]);
+      const result = await runPayment(intent, policy, asCoreLedger, adapters[rail], paymentOptions);
       return { ...result, intent };
     },
 
@@ -188,6 +163,7 @@ export function createInMemoryClient(options: InMemoryClientOptions = {}): Agent
           ledger: asCoreLedger,
           adapter: adapters[rail],
           approver,
+          ...paymentOptions,
         });
       } catch (err) {
         mapApproveRejectError(err, intentId);

@@ -1,6 +1,6 @@
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import type { Decision, DecisionRecord, LedgerEntry } from '@agent-pay/core';
-import { isSubmitting, needsManualResolve, reasonInfo } from './compat';
+import { isSubmitting, needsManualResolve, reasonInfo, failureInfo, manualResolveErrorFromEntry } from './compat';
 
 export type TimelineEventKind = 'intent' | 'decision' | 'payment' | 'receipt' | 'resolution';
 
@@ -80,6 +80,18 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
         kind: 'payment',
         sortSeq: SEQ.payment - 1,
       });
+    } else if (needsManualResolve(entry)) {
+      const err = manualResolveErrorFromEntry(entry);
+      const info = failureInfo(err);
+      events.push({
+        id: `${intentId}-paid-uncertain`,
+        at: entry.updatedAt,
+        label: 'payment needs check (pending)',
+        detail: `${info.label}. ${info.explanation}`,
+        kind: 'payment',
+        sortSeq: SEQ.payment,
+        warn: true,
+      });
     } else if (entry.paymentStatus === 'paid') {
       events.push({
         id: `${intentId}-paid`,
@@ -100,12 +112,13 @@ export function entriesToTimeline(entries: LedgerEntry[]): TimelineEvent[] {
 
     if (entry.receipt) {
       if (needsManualResolve(entry)) {
-        const meta = (entry.receipt as { meta?: Record<string, string> }).meta;
+        const err = manualResolveErrorFromEntry(entry);
+        const info = failureInfo(err);
         events.push({
           id: `${intentId}-receipt-manual`,
           at: entry.receipt.at,
-          label: 'receipt needs manual resolution',
-          detail: meta?.error,
+          label: 'payment needs check (pending)',
+          detail: `${info.label}. ${info.explanation}`,
           kind: 'receipt',
           sortSeq: SEQ.receipt,
           warn: true,

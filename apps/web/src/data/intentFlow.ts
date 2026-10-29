@@ -1,6 +1,6 @@
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import type { DecisionRecord, LedgerEntry } from '@agent-pay/core';
-import { isSubmitting, isSubmittingResult, needsManualResolve } from './compat';
+import { isSubmitting, isSubmittingResult, needsManualResolve, NEEDS_CHECK_PENDING_LABEL } from './compat';
 import type { PaymentResult, PipelineStep } from '../types';
 
 export const PENDING_SLOW_MS = 30_000;
@@ -76,7 +76,7 @@ function overallLabel(overall: IntentFlowOverall): string {
     paid: 'Paid',
     pending: 'Pending receipt',
     submitting: 'Submitting payment',
-    needs_manual_resolve: 'Needs manual resolution',
+    needs_manual_resolve: 'Needs check (pending)',
     awaiting_approval: 'Awaiting approval',
     rejected_by_policy: 'Rejected by policy',
     rejected_by_human: 'Rejected by human',
@@ -346,6 +346,9 @@ export function derivePipelineSteps(
     if (s === 'receipt' && result?.receipt?.status === 'pending' && i === currentIdx) {
       state = 'pending';
     }
+    if (result && needsManualResolve(result) && (s === 'payment' || s === 'receipt') && i >= currentIdx) {
+      state = 'pending';
+    }
     if (s === 'approval' && result?.status === 'needs_approval' && i === currentIdx) {
       state = 'current';
     }
@@ -358,6 +361,11 @@ export function derivePipelineSteps(
     }
 
     return { step: s, state, label: PIPELINE_LABELS[s] };
+  }).map((view) => {
+    if (result && needsManualResolve(result) && (view.step === 'payment' || view.step === 'receipt')) {
+      return { ...view, label: NEEDS_CHECK_PENDING_LABEL };
+    }
+    return view;
   });
 }
 

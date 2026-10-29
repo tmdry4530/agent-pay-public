@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../apiError';
 import { isAlreadyProcessed, isSubmitting, needsManualResolve, normalizeTotals } from '../compat';
 import { DEMO_POLICY, createInMemoryClient } from '../inMemoryClient';
-import { MemoryLedger, countsTowardDailyTotal, utcDay } from '../memoryLedger';
+import { MemoryLedger, utcDay } from '../memoryLedger';
 import type { IntentDraft } from '../agentPayClient';
 
 describe('inMemoryClient data-layer scenarios', () => {
@@ -38,17 +38,7 @@ describe('inMemoryClient data-layer scenarios', () => {
     await ledger.recordDecision('u2', { status: 'approved', reason: 'within_policy: ok' });
     await ledger.recordPayment('u2', 'paid');
 
-    const entries = await ledger.list();
-    const totals: Record<string, Record<string, number>> = {};
-    for (const e of entries) {
-      if (utcDay(e.intent.createdAt) === day && countsTowardDailyTotal(e)) {
-        const cur = String(e.intent.currency).toUpperCase();
-        const agent = e.intent.agentId;
-        totals[agent] ??= {};
-        totals[agent][cur] = (totals[agent][cur] ?? 0) + e.intent.amount;
-      }
-    }
-    expect(totals[DEMO_POLICY.agentId]).toEqual({ USD: 12, EUR: 5 });
+    expect(await ledger.dailyTotals(DEMO_POLICY.agentId, day)).toEqual({ USD: 12, EUR: 5 });
   });
 
   it('submitting visible during delayed pay then cleared', async () => {
@@ -72,22 +62,56 @@ describe('inMemoryClient data-layer scenarios', () => {
   });
 
   it('manual-resolve payOutcome keeps pending, counts toward total, refresh unchanged', async () => {
+    vi.useFakeTimers();
+    try {
+      idCounter = 0;
+      const client = createInMemoryClient({
+        now: fixedNow,
+        newId,
+        payOutcome: 'timeout',
+        payTimeoutMs: 50,
+        payDelayMs: 0,
+      });
+      const payPromise = client.submitIntent(smallDraft, 'mock');
+      await vi.advanceTimersByTimeAsync(50);
+      const out = await payPromise;
+      expect(out.status).toBe('paid');
+      expect(out.needsManualResolve).toBe(true);
+      expect(out.error).toMatch(/^adapter_timeout:/);
+      expect(out.receipt?.status).toBe('pending');
+      const entry = (await client.getLedger()).entries[0]!;
+      expect(needsManualResolve(entry)).toBe(true);
+      expect(entry.needsManualResolve).toBe(true);
+      const total =
+        normalizeTotals((await client.getLedger()).today, {
+          agentId: DEMO_POLICY.agentId,
+          fallbackCurrency: 'USD',
+        }).USD ?? 0;
+      expect(total).toBe(12);
+      const refreshed = await client.refresh(out.intentId);
+      expect(refreshed.changed).toBe(false);
+      expect(refreshed.receipt?.status).toBe('pending');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('payOutcome throw yields adapter_error and top-level needsManualResolve', async () => {
     idCounter = 0;
-    const client = createInMemoryClient({ now: fixedNow, newId, payOutcome: 'timeout', payDelayMs: 0 });
+    const client = createInMemoryClient({ now: fixedNow, newId, payOutcome: 'throw' });
     const out = await client.submitIntent(smallDraft, 'mock');
-    expect(out.status).toBe('paid');
-    expect(out.receipt?.status).toBe('pending');
+    expect(out.needsManualResolve).toBe(true);
+    expect(out.error).toMatch(/^adapter_error:/);
     const entry = (await client.getLedger()).entries[0]!;
-    expect(needsManualResolve(entry)).toBe(true);
-    const total =
-      normalizeTotals((await client.getLedger()).today, {
-        agentId: DEMO_POLICY.agentId,
-        fallbackCurrency: 'USD',
-      }).USD ?? 0;
-    expect(total).toBe(12);
-    const refreshed = await client.refresh(out.intentId);
-    expect(refreshed.changed).toBe(false);
-    expect(refreshed.receipt?.status).toBe('pending');
+    expect(entry.needsManualResolve).toBe(true);
+  });
+
+  it('payOutcome mismatch yields receipt_mismatch', async () => {
+    idCounter = 0;
+    const client = createInMemoryClient({ now: fixedNow, newId, payOutcome: 'mismatch' });
+    const out = await client.submitIntent(smallDraft, 'mock');
+    expect(out.needsManualResolve).toBe(true);
+    expect(out.error).toMatch(/^receipt_mismatch:/);
   });
 
   it('invalidPolicy rejects with invalid_policy reason', async () => {

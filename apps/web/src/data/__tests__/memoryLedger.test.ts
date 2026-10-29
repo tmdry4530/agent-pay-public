@@ -177,4 +177,60 @@ describe('MemoryLedger', () => {
       }),
     ).rejects.toThrow(/not pending/);
   });
+
+  it('recordPaymentResult sets needsManualResolve and settleReceipt clears it', async () => {
+    const ledger = new MemoryLedger({ now });
+    await ledger.recordIntent(baseIntent);
+    await ledger.recordDecision(baseIntent.id, { status: 'approved', reason: 'within_policy: ok' });
+    await ledger.markSubmitting(baseIntent.id, 'mock');
+    await ledger.recordPaymentResult(baseIntent.id, {
+      status: 'paid',
+      receipt: {
+        intentId: baseIntent.id,
+        rail: 'mock',
+        externalId: '',
+        status: 'pending',
+        at: now().toISOString(),
+      },
+      needsManualResolve: true,
+    });
+    let entry = await ledger.get(baseIntent.id);
+    expect(entry?.needsManualResolve).toBe(true);
+    await ledger.settleReceipt(baseIntent.id, {
+      intentId: baseIntent.id,
+      rail: 'mock',
+      externalId: 'mock_settled',
+      status: 'succeeded',
+      at: now().toISOString(),
+    });
+    entry = await ledger.get(baseIntent.id);
+    expect(entry?.needsManualResolve).toBeUndefined();
+  });
+
+  it('dailyTotals buckets by accounting day and currency', async () => {
+    const ledger = new MemoryLedger({ now });
+    await ledger.recordIntent(baseIntent);
+    await ledger.recordDecision(baseIntent.id, {
+      status: 'approved',
+      reason: 'within_policy: ok',
+    });
+    expect(await ledger.dailyTotals('a')).toEqual({ USD: 10 });
+    expect(await ledger.dailyTotal('a', undefined, 'usd')).toBe(10);
+  });
+
+  it('recordReceipt rejects while submitting', async () => {
+    const ledger = new MemoryLedger({ now });
+    await ledger.recordIntent(baseIntent);
+    await ledger.recordDecision(baseIntent.id, { status: 'approved', reason: 'within_policy: ok' });
+    await ledger.markSubmitting(baseIntent.id, 'mock');
+    await expect(
+      ledger.recordReceipt(baseIntent.id, {
+        intentId: baseIntent.id,
+        rail: 'mock',
+        externalId: 'x',
+        status: 'succeeded',
+        at: now().toISOString(),
+      }),
+    ).rejects.toThrow(/submitting/);
+  });
 });

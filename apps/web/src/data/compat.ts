@@ -1,25 +1,28 @@
 /**
- * Compatibility parsers for in-flight API/core shape changes (align with main ~2026-10-31).
+ * Compatibility parsers for in-flight API/core shape changes.
  *
- * Assumptions (update this header when shapes land):
- * A. Submitting: LedgerEntry.paymentStatus may be 'submitting'; also entry.status/state === 'submitting';
- *    PaymentResult.status may be 'submitting'.
- * B. Manual resolve: receipt.meta.needsManualResolve 'true'|true with receipt.status 'pending' (or missing
- *    receipt with paymentStatus paid/submitting); top-level entry.needsManualResolve; result.needsManualResolve.
- *    False once receipt is succeeded/failed/refunded or entry.resolution is set.
- * C. Race loss: HTTP 409 with code not_pending | already_paid; on approve/reject any 409 except intent_conflict
- *    counts as race loss when action is approve|reject.
- * D. Decision reasons: "code: detail"; invalid_policy and invalid_amount labels documented below.
- * E. Ledger today totals: primary Record<agentId, Record<CURRENCY, number>>; alternate totalsByCurrency;
- *    legacy per-agent number maps to fallbackCurrency; flat Record<CUR,number> when keys look like currency
- *    codes and no agentId key is present at the top level (heuristic: all own keys match /^[A-Z]{3,4}$/ and
- *    values are finite numbers).
+ * CONFIRMED by packages/core (2026-10):
+ * - Submitting: LedgerEntry.paymentStatus === 'submitting'; submission { rail, at }.
+ * - Manual resolve: top-level LedgerEntry.needsManualResolve and PaymentResult.needsManualResolve;
+ *   uncertain outcome is status paid + receipt pending + needsManualResolve (never show as PAID).
+ * - FailureCode prefix on PaymentResult.error (adapter_error, adapter_timeout, receipt_mismatch,
+ *   payment_declined, payment_failed).
+ * - invalid_policy via ReasonCode.InvalidPolicy / policyProblem.
+ * - Per-currency dailyTotals / dailyTotal (normalizeCurrency upper-case keys).
+ *
+ * ASSUMED pending API on main:
+ * - HTTP 409 race body/code (not_pending | already_paid); normalizeTotals stays tolerant.
+ * - GET /ledger today.totals may still be { agentId: number }; we accept per-currency maps too.
+ *
+ * Legacy fallback only: receipt.meta.needsManualResolve string/boolean (pre-core API responses).
  *
  * All tolerant parsing lives in this module; consumers use the exported helpers only.
  */
 
 import { ReasonCode } from '@agent-pay/core/policy.ts';
-import { PaymentError } from '@agent-pay/core/orchestrator.ts';
+import { FailureCode, PaymentError } from '@agent-pay/core/orchestrator.ts';
+import type { LedgerEntry } from '@agent-pay/core';
+import type { PaymentResult } from '../types';
 import { ApiError, apiErrorCode } from './apiError';
 
 const CURRENCY_KEY = /^[A-Z]{3,4}$/;
@@ -62,6 +65,9 @@ function metaNeedsManualResolve(receipt: LooseRecord | undefined): boolean {
   return v === true || v === 'true';
 }
 
+/** UI label for uncertain rail outcomes (never display as PAID). */
+export const NEEDS_CHECK_PENDING_LABEL = 'Needs check (pending)';
+
 /** True when a ledger entry (or compatible object) represents payment in flight. */
 export function isSubmitting(entry: unknown): boolean {
   const obj = asRecord(entry);
@@ -98,11 +104,94 @@ export function needsManualResolve(entry: unknown): boolean {
 
   if (!receipt) {
     const ps = obj.paymentStatus;
-    return ps === 'paid' || ps === 'submitting';
+    if (ps === 'paid' || ps === 'submitting') return true;
+    if (obj.status === 'paid' && topLevel) return true;
+    return false;
   }
 
   const status = readStringField(receipt, 'status');
   return status === 'pending' || status === undefined;
+}
+
+/** Reads a failure/operator error string from a ledger entry (legacy meta or none). */
+export function manualResolveErrorFromEntry(entry: LedgerEntry): string | undefined {
+  const meta = (entry.receipt as { meta?: Record<string, string> } | undefined)?.meta;
+  if (meta?.error) return meta.error;
+  return undefined;
+}
+
+const FAILURE_INFO: Record<
+  string,
+  { label: string; explanation: string }
+> = {
+  [FailureCode.AdapterError]: {
+    label: 'Rail error',
+    explanation:
+      'The rail call threw; the outcome is unknown, the amount stays held, and the payment must not be retried.',
+  },
+  [FailureCode.AdapterTimeout]: {
+    label: 'Rail timeout',
+    explanation:
+      'The rail did not answer within the timeout; the outcome is unknown, the amount stays held, and the payment must not be retried.',
+  },
+  [FailureCode.ReceiptMismatch]: {
+    label: 'Receipt mismatch',
+    explanation:
+      'The rail returned a receipt for a different intent, rail, or status; the outcome is unknown and the amount stays held.',
+  },
+  [FailureCode.PaymentDeclined]: {
+    label: 'Payment declined',
+    explanation: 'The rail declined the payment with a failed receipt.',
+  },
+  [FailureCode.PaymentFailed]: {
+    label: 'Payment failed',
+    explanation: 'The payment was recorded as failed.',
+  },
+};
+
+const GENERIC_FAILURE = {
+  code: 'unknown',
+  label: 'Unknown outcome',
+  explanation: 'The payment outcome could not be confirmed automatically.',
+};
+
+/** Parses PaymentResult.error or compatible "code: detail" strings for display. */
+export function failureInfo(error?: string): { code: string; label: string; explanation: string } {
+  if (!error?.trim()) return { ...GENERIC_FAILURE };
+  const i = error.indexOf(':');
+  const code = (i === -1 ? error : error.slice(0, i)).trim();
+  const detail = i === -1 ? '' : error.slice(i + 1).trim();
+  const mapped = FAILURE_INFO[code];
+  if (mapped) {
+    return {
+      code,
+      label: mapped.label,
+      explanation: detail ? `${mapped.explanation} (${detail})` : mapped.explanation,
+    };
+  }
+  return {
+    code,
+    label: humanizeCode(code),
+    explanation: detail || GENERIC_FAILURE.explanation,
+  };
+}
+
+const MANUAL_RESOLVE_FOOTER =
+  'The amount stays reserved and is not marked failed. An operator must check the rail and settle it (POST /intents/:id/resolve). Do not retry the payment.';
+
+/** Banner body for uncertain outcomes (manual-resolve box). */
+export function manualResolveBannerText(error?: string): string {
+  const info = failureInfo(error);
+  return `${info.label}. ${info.explanation} ${MANUAL_RESOLVE_FOOTER}`;
+}
+
+/** Result badge / pipeline label: never "paid" for uncertain outcomes. */
+export function displayRunStatus(result: PaymentResult | null, entry?: LedgerEntry): string | null {
+  if (!result) return null;
+  if (needsManualResolve(result) || (entry !== undefined && needsManualResolve(entry))) {
+    return NEEDS_CHECK_PENDING_LABEL;
+  }
+  return result.status.replace('_', ' ');
 }
 
 export type AlreadyProcessedOptions = {

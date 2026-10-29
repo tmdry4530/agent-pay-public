@@ -97,6 +97,7 @@ describe('App r2 flows', () => {
   it('manual resolve shows warning box without pending slow hint', async () => {
     const client = createInMemoryClient({
       payOutcome: 'timeout',
+      payTimeoutMs: 50,
       payDelayMs: 0,
       now: () => new Date('2026-03-01T12:00:00.000Z'),
     });
@@ -108,7 +109,26 @@ describe('App r2 flows', () => {
     expect(await screen.findByTestId('manual-resolve')).toBeInTheDocument();
     expect(screen.queryByTestId('pending-slow-hint')).not.toBeInTheDocument();
     expect(screen.queryByTestId('btn-refresh')).not.toBeInTheDocument();
-    expect(screen.getByTestId('intent-flows')).toHaveTextContent('Needs manual resolution');
+    expect(screen.getByTestId('intent-flows')).toHaveTextContent('Needs check (pending)');
+  });
+
+  it('uncertain outcome shows Needs check (pending) and not PAID/Paid badges', async () => {
+    const client = createInMemoryClient({
+      payOutcome: 'timeout',
+      payTimeoutMs: 50,
+      now: () => new Date('2026-03-01T12:00:00.000Z'),
+    });
+    renderWith(client);
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('scenario-approved'));
+    await user.click(screen.getByTestId('btn-quote'));
+    await user.click(screen.getByTestId('btn-policy'));
+    await screen.findByTestId('manual-resolve');
+    expect(screen.getByTestId('result-status')).toHaveTextContent('Needs check (pending)');
+    expect(screen.getByTestId('intent-flows')).toHaveTextContent('Needs check (pending)');
+    expect(screen.getAllByText(/Rail timeout/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Paid$/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('result-status')).not.toHaveTextContent(/^paid$/i);
   });
 
   it('renders totals-by-currency when multiple currencies have spend', async () => {

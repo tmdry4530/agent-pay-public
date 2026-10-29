@@ -14,14 +14,24 @@ describe('MemoryLedger submitting', () => {
     createdAt: now().toISOString(),
   };
 
-  it('markSubmitting then recordPayment from submitting', async () => {
+  it('markSubmitting then recordPaymentResult from submitting', async () => {
     const ledger = new MemoryLedger({ now });
     await ledger.recordIntent(intent);
     await ledger.recordDecision(intent.id, { status: 'approved', reason: 'within_policy: ok' });
-    await ledger.markSubmitting(intent.id);
+    await ledger.markSubmitting(intent.id, 'mock');
     let entry = await ledger.get(intent.id);
     expect(isSubmitting(entry)).toBe(true);
-    await ledger.recordPayment(intent.id, 'paid');
+    expect(entry?.submission?.rail).toBe('mock');
+    await ledger.recordPaymentResult(intent.id, {
+      status: 'paid',
+      receipt: {
+        intentId: intent.id,
+        rail: 'mock',
+        externalId: 'x',
+        status: 'succeeded',
+        at: now().toISOString(),
+      },
+    });
     entry = await ledger.get(intent.id);
     expect(entry?.paymentStatus).toBe('paid');
   });

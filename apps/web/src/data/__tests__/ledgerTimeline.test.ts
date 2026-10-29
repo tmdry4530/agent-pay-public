@@ -134,7 +134,7 @@ describe('entriesToTimeline', () => {
         meta: { needsManualResolve: 'true', error: 'timeout' },
       } as LedgerEntry['receipt'],
     });
-    const manualEv = entriesToTimeline([manual]).find((e) => e.label === 'receipt needs manual resolution');
+    const manualEv = entriesToTimeline([manual]).find((e) => e.label === 'payment needs check (pending)');
     expect(manualEv?.warn).toBe(true);
   });
 

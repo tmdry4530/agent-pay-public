@@ -4,8 +4,11 @@ import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { apiErrorCode } from './data/apiError';
 import {
   dailyTotalForAgent,
+  displayRunStatus,
+  failureInfo,
   isAlreadyProcessed,
   isSubmitting,
+  manualResolveBannerText,
   needsManualResolve,
   normalizeTotals,
   reasonInfo,
@@ -639,11 +642,11 @@ export default function App() {
               <h3>Decision</h3>
               {result && (
                 <span
-                  className={`result-badge status-${result.status}`}
+                  className={`result-badge status-${result.status}${manualResolvePending ? ' status-needs-check' : ''}`}
                   data-testid="result-status"
                   aria-live="polite"
                 >
-                  {result.status.replace('_', ' ')}
+                  {displayRunStatus(result, currentLedgerEntry) ?? result.status.replace('_', ' ')}
                 </span>
               )}
               <p className="decision-status">{decision.status.replace('_', ' ')}</p>
@@ -663,6 +666,16 @@ export default function App() {
                   {reasonParts.detail && <p>{reasonParts.detail}</p>}
                 </>
               )}
+              {result?.status === 'failed' && result.error && (
+                <p className="failure-detail hint" data-testid="payment-failure-detail">
+                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
+                </p>
+              )}
+              {manualResolvePending && result?.error && (
+                <p className="failure-detail hint" data-testid="payment-failure-detail">
+                  {failureInfo(result.error).label}. {failureInfo(result.error).explanation}
+                </p>
+              )}
               {humanOutcome && (
                 <p className="human-outcome" data-testid="human-outcome">
                   {humanOutcome}
@@ -679,12 +692,8 @@ export default function App() {
               <h3>Receipt</h3>
               {manualResolvePending && (
                 <div className="manual-resolve status-banner status-banner--warn" data-testid="manual-resolve" role="status">
-                  <p className="status-banner__title">Needs manual resolution</p>
-                  <p className="hint">
-                    The payment rail did not confirm the outcome (pay threw or timed out). The amount stays
-                    reserved; it is not marked failed. An operator must settle it (POST /intents/:id/resolve
-                    with the rail&apos;s external id) — do not retry the payment.
-                  </p>
+                  <p className="status-banner__title">Needs check (pending)</p>
+                  <p className="hint">{manualResolveBannerText(result.error)}</p>
                 </div>
               )}
               {result.receipt.status === 'pending' && !manualResolvePending && (

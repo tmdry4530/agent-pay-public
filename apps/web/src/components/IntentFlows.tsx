@@ -1,6 +1,6 @@
 import type { DecisionRecord, LedgerEntry } from '@agent-pay/core';
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
-import { reasonInfo, showReasonLabelForDecision } from '../data/compat';
+import { reasonInfo, showReasonLabelForDecision, failureInfo, manualResolveErrorFromEntry } from '../data/compat';
 import { deriveIntentFlow, compactStageIcon } from '../data/intentFlow';
 
 function formatMoney(amount: number, currency: string): string {
@@ -59,14 +59,22 @@ export function IntentFlows({ entries }: Props) {
             const flow = deriveIntentFlow(entry);
             const policyReasonStr = policyReason(entry);
             const policyInfo = policyReasonStr ? reasonInfo(policyReasonStr) : null;
+            const resolveErr = manualResolveErrorFromEntry(entry);
+            const failure = flow.overall === 'needs_manual_resolve' ? failureInfo(resolveErr) : null;
             return (
               <li key={entry.intent.id} data-testid="intent-flow">
                 <div className="intent-flow__header">
                   <span className="intent-flow__title">
                     {entry.intent.purpose} · {formatMoney(entry.intent.amount, entry.intent.currency)}
                   </span>
-                  <span className={`intent-flow__chip overall-${flow.overall}`}>
+                  <span
+                    className={`intent-flow__chip overall-${flow.overall}`}
+                    title={failure ? `${failure.label}. ${failure.explanation}` : undefined}
+                  >
                     {flow.overallLabel}
+                    {failure && (
+                      <span className="intent-flow__failure-label"> · {failure.label}</span>
+                    )}
                     {policyInfo && showReasonLabelForDecision(policyInfo.code) && policyInfo.explanation && (
                       <span className="sr-only"> {policyInfo.explanation}</span>
                     )}

@@ -12,7 +12,7 @@ export default defineConfig({
     alias: [
       { find: '@agent-pay/core/policy.ts', replacement: path.join(coreSrc, 'policy.ts') },
       { find: '@agent-pay/core/orchestrator.ts', replacement: path.join(coreSrc, 'orchestrator.ts') },
-      { find: '@agent-pay/core', replacement: path.join(coreSrc, 'index.ts') },
+      { find: /^@agent-pay\/core$/, replacement: path.join(coreSrc, 'index.ts') },
       { find: /^@agent-pay\/core\/(.+)$/, replacement: `${coreSrc}/$1` },
       { find: 'node:util', replacement: path.resolve(root, 'src/shims/node-util.ts') },
     ],

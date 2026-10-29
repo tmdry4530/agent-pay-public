@@ -183,7 +183,7 @@ describe('deriveIntentFlow', () => {
         decisions: [
           { status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, actor: 'policy' },
         ],
-        paymentStatus: 'submitting' as unknown as LedgerEntry['paymentStatus'],
+        paymentStatus: 'submitting',
       }),
     );
     expect(flow.overall).toBe('submitting');
@@ -203,17 +203,18 @@ describe('deriveIntentFlow', () => {
           { status: 'approved', reason: `${ReasonCode.WithinPolicy}: ok`, actor: 'policy' },
         ],
         paymentStatus: 'paid',
+        needsManualResolve: true,
         receipt: {
           intentId: 'i1',
           status: 'pending',
           rail: 'mock',
           externalId: '',
           at: '2026-01-01T12:00:02.000Z',
-          meta: { needsManualResolve: 'true' },
-        } as LedgerEntry['receipt'],
+        },
       }),
     );
     expect(flow.overall).toBe('needs_manual_resolve');
+    expect(flow.overallLabel).toBe('Needs check (pending)');
     expect(flow.stages.find((s) => s.id === 'receipt')?.state).toBe('attention');
   });
 

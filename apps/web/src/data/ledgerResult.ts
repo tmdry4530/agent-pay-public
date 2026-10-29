@@ -31,6 +31,15 @@ export function paymentResultFromLedgerEntry(entry: LedgerEntry): PaymentResult 
     };
   }
 
+  if (entry.needsManualResolve === true && entry.paymentStatus === 'paid') {
+    return {
+      ...base,
+      status: 'paid',
+      ...(entry.receipt ? { receipt: entry.receipt } : {}),
+      needsManualResolve: true,
+    };
+  }
+
   if (entry.paymentStatus === 'paid' || entry.receipt) {
     return {
       ...base,
