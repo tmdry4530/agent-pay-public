@@ -71,6 +71,6 @@ export interface Receipt {
 
 /** Snapshot of ledger data that `evaluate` needs. */
 export interface LedgerState {
-  /** Amount already counted for this agent on the intent's UTC day. */
+  /** Amount already counted for this agent, in the intent's currency, on the intent's UTC day. */
   dailyTotal: number;
 }

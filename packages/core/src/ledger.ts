@@ -294,24 +294,34 @@ export class Ledger {
   /**
    * Sum of counted amounts (see countsTowardDailyTotal) for `agentId` on a UTC
    * day. `day` is a Date, an ISO timestamp, or "YYYY-MM-DD"; default is today
-   * (UTC) per the injected clock.
+   * (UTC) per the injected clock. Pass `currency` (case-insensitive) to sum only
+   * that currency, which is what policy limits use; without it every currency is
+   * added together (legacy behavior, only meaningful for single-currency ledgers).
    */
-  async dailyTotal(agentId: string, day?: Date | string): Promise<number> {
+  async dailyTotal(agentId: string, day?: Date | string, currency?: string): Promise<number> {
+    const totals = await this.dailyTotals(agentId, day);
+    if (currency !== undefined) return totals[normalizeCurrency(currency)] ?? 0;
+    return Object.values(totals).reduce((a, b) => a + b, 0);
+  }
+
+  /** Per-currency daily totals (currency codes upper-cased), same rules as dailyTotal. */
+  async dailyTotals(agentId: string, day?: Date | string): Promise<Record<string, number>> {
     const target =
       day === undefined ? utcDay(this.#now()) : typeof day === 'string' && DAY_RE.test(day) ? day : utcDay(day);
     const file = await this.load();
-    let total = 0;
+    const totals: Record<string, number> = {};
     for (const e of file.entries) {
       if (e.intent.agentId === agentId && utcDay(e.intent.createdAt) === target && countsTowardDailyTotal(e)) {
-        total += e.intent.amount;
+        const c = normalizeCurrency(e.intent.currency);
+        totals[c] = (totals[c] ?? 0) + e.intent.amount;
       }
     }
-    return total;
+    return totals;
   }
 
   /**
-   * LedgerState for evaluating `intent`: the total for its agent on the UTC day
-   * of intent.createdAt, excluding the intent itself if already recorded.
+   * LedgerState for evaluating `intent`: the total for its agent, in its currency,
+   * on the UTC day of intent.createdAt, excluding the intent itself if already recorded.
    */
   async ledgerStateFor(intent: PaymentIntent): Promise<LedgerState> {
     return stateFor(await this.load(), intent);
@@ -568,13 +578,20 @@ function assertDecidable(entry: LedgerEntry, ifStatus: DecisionStatus | undefine
   }
 }
 
+/** Currency key used for per-currency totals: upper-cased (same comparison evaluate uses). */
+export function normalizeCurrency(currency: string): string {
+  return String(currency).toUpperCase();
+}
+
 function stateFor(file: LedgerFile, intent: PaymentIntent): LedgerState {
   const day = utcDay(intent.createdAt);
+  const currency = normalizeCurrency(intent.currency);
   let total = 0;
   for (const e of file.entries) {
     if (
       e.intent.id !== intent.id &&
       e.intent.agentId === intent.agentId &&
+      normalizeCurrency(e.intent.currency) === currency &&
       utcDay(e.intent.createdAt) === day &&
       countsTowardDailyTotal(e)
     ) {
