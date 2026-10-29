@@ -11,7 +11,8 @@ export function ErrorBanner({ error, onRetry, onDismiss }: Props) {
   return (
     <div
       className={`error-banner${isInfo ? ' error-banner--info' : ''}`}
-      data-testid="error-banner"
+      data-testid={isInfo ? 'race-banner' : 'error-banner'}
+      {...(isInfo ? { 'data-code': error.code } : {})}
       role={isInfo ? 'status' : 'alert'}
     >
       <p className="error-banner__title">{error.title}</p>

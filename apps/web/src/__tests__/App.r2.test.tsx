@@ -7,10 +7,13 @@ import { ApiError } from '../data/apiError';
 import type { AgentPayClient } from '../data/agentPayClient';
 import { createInMemoryClient, DEMO_POLICY } from '../data/inMemoryClient';
 
+const r2Clock = () => new Date('2026-03-01T12:00:05.000Z');
+
 function renderWith(client: AgentPayClient) {
   return render(
     <ClientProvider client={client}>
-      <App />
+      {/* Mock ledgers in this file use 2026-03-01; keep the UI clock aligned so nothing looks stuck. */}
+      <App clock={r2Clock} />
     </ClientProvider>,
   );
 }
@@ -67,7 +70,7 @@ describe('App r2 flows', () => {
     await user.click(screen.getByTestId('btn-policy'));
     await user.click(screen.getByTestId('btn-approve'));
 
-    const banner = await screen.findByTestId('error-banner');
+    const banner = await screen.findByTestId('race-banner');
     expect(banner).toHaveAttribute('role', 'status');
     expect(banner).toHaveTextContent('Already processed');
     expect(screen.queryByTestId('btn-retry')).not.toBeInTheDocument();
