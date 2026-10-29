@@ -306,3 +306,9 @@ unknown value) exits 1 with `unknown_rail: RAIL must be one of mock|paypal|near`
    catches it, so it stays `pending` (`needsManualResolve`) instead of `failed`.
 9. Whether every NEAR RPC node we use returns `final_execution_status`. On older nodes that don't, the payment
    always stays `pending` and needs `POST /intents/:id/resolve` or a refresh against a node that does.
+
+## Known risks (remaining)
+
+- The missing-ledger-file guard (F9) only works within one process; a fresh process recreates a missing ledger file.
+- Adapters take no AbortSignal, so a pay or status call that timed out keeps running in the background; its late response is ignored and not recorded, so the operator should resolve the entry manually (`POST /intents/:id/resolve`).
+- Taking over a stale ledger lock is best-effort.
