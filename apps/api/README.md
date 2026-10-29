@@ -83,7 +83,8 @@ batches with 2+ items). The route never calls the adapter (`pay()` or `status()`
   (already settled, including a second resolve).
 - No auth: like the rest of this demo API it is meant for localhost only; `resolvedBy` is self-reported.
 
-**Status codes:** `400` `invalid_body` / `invalid_json` / `invalid_path`; `404` `not_found` (route) or
+**Status codes:** `400` `invalid_body` / `invalid_json` / `invalid_path`; `403` `forbidden_origin` (disallowed
+`Origin` on non-safe methods); `404` `not_found` (route) or
 `intent_not_found`; `405` `method_not_allowed` (with `Allow`); `409` `already_paid`, `not_pending`, `in_progress`,
 `intent_conflict`, `no_receipt`, `receipt_not_pending`, `status_unsupported`; `502` `status_check_failed`; `413` `payload_too_large` (body cap 64 KiB); `500` `internal_error`. Policy rejections are not
 HTTP errors: they come back as `status: "rejected"` results.
@@ -92,6 +93,10 @@ HTTP errors: they come back as `status: "rejected"` results.
 `Access-Control-Allow-Origin` (with `Vary: Origin`). `OPTIONS` answers `204` with `Allow`; for an allowed origin it
 adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type` and `Max-Age: 600`. Other origins
 get no CORS headers.
+
+**Origin (CSRF):** for methods other than `GET`, `HEAD`, and `OPTIONS`, if the request sends an `Origin` header that
+is not allowed, the server responds `403` `forbidden_origin: …` before the route handler runs or the body is read;
+requests with no `Origin` are unchanged.
 
 ## Adapter registry
 `apps/api/src/adapters.ts`:

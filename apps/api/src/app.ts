@@ -207,13 +207,16 @@ export function createApp(options: AppOptions) {
       }
       const handler = match.route.methods[method];
       if (!handler) throw new HttpError(405, `method_not_allowed: ${method} ${path}`, { Allow: allow });
+      if (method !== 'GET' && method !== 'HEAD' && origin !== undefined && !isAllowedOrigin(origin)) {
+        throw new HttpError(403, `forbidden_origin: origin not allowed for ${method}`);
+      }
       const { status, body } = await handler(req, match.params);
       send(res, status, body, cors);
     } catch (err) {
       const { status, message, headers } = toHttpError(err);
       if (status >= 500) console.error(err);
       send(res, status, { error: message }, { ...cors, ...headers });
-      if (status === 413) req.resume();
+      if (status === 413 || status === 403) req.resume();
     }
   }
 
