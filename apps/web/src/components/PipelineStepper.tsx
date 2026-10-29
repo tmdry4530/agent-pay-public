@@ -48,7 +48,7 @@ export function PipelineStepper({ steps, stepperRef, mobileLabel }: Props) {
             <li
               key={s.step}
               className={classes}
-              aria-current={s.state === 'current' ? 'step' : undefined}
+              aria-current={s.state === 'current' || s.ariaCurrent ? 'step' : undefined}
             >
               <span className="stepper__dot" aria-hidden>
                 {iconFor(s, i)}

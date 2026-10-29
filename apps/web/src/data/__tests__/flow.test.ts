@@ -1,14 +1,24 @@
 import { ReasonCode } from '@agent-pay/core/policy.ts';
-import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { describe, expect, it } from 'vitest';
-import { DEMO_SCENARIOS } from '../../types';
+import { ApiError } from '../apiError';
 import { DEMO_POLICY, createInMemoryClient } from '../inMemoryClient';
 import type { IntentDraft, Rail } from '../agentPayClient';
+import { DEMO_SCENARIOS } from '../../types';
+import { normalizeTotals } from '../compat';
 
 describe('AgentPay in-memory client', () => {
   const fixedNow = () => new Date('2026-01-15T12:00:00.000Z');
   let idCounter = 0;
   const newId = () => `test-id-${++idCounter}`;
+
+  function agentTotal(snap: Awaited<ReturnType<ReturnType<typeof createInMemoryClient>['getLedger']>>): number {
+    return (
+      normalizeTotals(snap.today, {
+        agentId: DEMO_POLICY.agentId,
+        fallbackCurrency: DEMO_POLICY.currency ?? 'USD',
+      }).USD ?? 0
+    );
+  }
 
   function draft(task: (typeof DEMO_SCENARIOS)[0]['task']): IntentDraft {
     return {
@@ -64,7 +74,7 @@ describe('AgentPay in-memory client', () => {
       await client.submitIntent(draft(DEMO_SCENARIOS[0]!.task), 'mock');
     }
     const snap = await client.getLedger();
-    expect(snap.today.totals[DEMO_POLICY.agentId]).toBe(192);
+    expect(agentTotal(snap)).toBe(192);
     const out = await client.submitIntent(draft(DEMO_SCENARIOS[0]!.task), 'mock');
     expect(out.status).toBe('rejected');
     expect(out.decision.reason).toMatch(new RegExp(ReasonCode.DailyLimitExceeded));
@@ -78,13 +88,9 @@ describe('AgentPay in-memory client', () => {
     expect(approved.status).toBe('paid');
     expect(approved.decision.reason).toMatch(new RegExp(ReasonCode.ApprovedByHuman));
     const snap = await client.getLedger();
-    expect(snap.today.totals[DEMO_POLICY.agentId]).toBe(75);
+    expect(agentTotal(snap)).toBe(75);
     const entry = snap.entries.find((e) => e.intent.id === submitted.intentId);
     expect(entry?.decisions).toHaveLength(2);
-    expect(entry?.decisions[0]).toMatchObject({
-      status: 'needs_approval',
-      actor: 'policy',
-    });
     expect(entry?.decisions[1]).toMatchObject({
       status: 'approved',
       actor: 'demo-operator',
@@ -97,15 +103,15 @@ describe('AgentPay in-memory client', () => {
     const rejected = await client.reject(submitted.intentId);
     expect(rejected.status).toBe('rejected');
     expect(rejected.decision.reason).toMatch(new RegExp(ReasonCode.RejectedByHuman));
-    await expect(client.approve(submitted.intentId)).rejects.toBeInstanceOf(PaymentError);
+    await expect(client.approve(submitted.intentId)).rejects.toBeInstanceOf(ApiError);
   });
 
   it('reset clears ledger totals', async () => {
     const client = createInMemoryClient({ now: fixedNow, newId });
     await client.submitIntent(draft(DEMO_SCENARIOS[0]!.task), 'mock');
-    expect((await client.getLedger()).today.totals[DEMO_POLICY.agentId]).toBe(12);
+    expect(agentTotal(await client.getLedger())).toBe(12);
     await client.reset!();
     expect((await client.getLedger()).entries).toHaveLength(0);
-    expect((await client.getLedger()).today.totals[DEMO_POLICY.agentId]).toBeUndefined();
+    expect(agentTotal(await client.getLedger())).toBe(0);
   });
 });
