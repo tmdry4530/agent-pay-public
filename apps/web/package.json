@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "demo:seed-needs-check": "node scripts/seed-needs-check.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

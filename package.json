@@ -14,6 +14,7 @@
     "demo": "node scripts/demo.mjs",
     "demo:record": "node scripts/record-demo.mjs",
     "demo:submission": "node scripts/record-submission.mjs",
+    "demo:seed-needs-check": "node apps/web/scripts/seed-needs-check.mjs",
     "test": "npm test --workspaces --if-present && cd apps/web && pnpm test",
     "typecheck": "npm run typecheck --workspaces --if-present && cd apps/web && pnpm typecheck",
     "web:install": "cd apps/web && pnpm install --frozen-lockfile",
