@@ -71,7 +71,6 @@ describe('App r2 flows', () => {
     expect(banner).toHaveAttribute('role', 'status');
     expect(banner).toHaveTextContent('Already processed');
     expect(screen.queryByTestId('btn-retry')).not.toBeInTheDocument();
-    expect(banner).toHaveAttribute('role', 'status');
     expect(banner).not.toHaveTextContent('not_pending');
     await waitFor(() => {
       expect(screen.queryByTestId('btn-approve')).not.toBeInTheDocument();
