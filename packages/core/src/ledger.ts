@@ -420,10 +420,15 @@ export class Ledger {
       await this.#write(file);
       return file;
     }
-    const parsed = JSON.parse(raw) as LedgerFile;
-    if (parsed?.version !== 1 || !Array.isArray(parsed.entries)) {
-      throw new LedgerError('invalid_input', `unsupported ledger file format at ${this.filePath}`);
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch (err) {
+      throw corrupt(this.filePath, `not valid JSON (${(err as Error).message})`);
     }
+    const problem = ledgerFileProblem(json);
+    if (problem) throw corrupt(this.filePath, problem);
+    const parsed = json as LedgerFile;
     // Files written before decision history: back-fill in memory only. The file is
     // rewritten in the new shape on the next mutation, never by a read.
     for (const entry of parsed.entries) {
@@ -450,6 +455,67 @@ export class Ledger {
     }
     await syncDir(dirname(this.filePath));
   }
+}
+
+function corrupt(filePath: string, problem: string): LedgerError {
+  return new LedgerError(
+    'ledger_corrupt',
+    `ledger file ${filePath} is corrupt: ${problem}. The file was not modified; restore it from a backup or repair it by hand.`,
+  );
+}
+
+const PAYMENT_STATUSES: readonly string[] = ['paid', 'failed'] satisfies PaymentStatus[];
+const DECISION_STATUSES: readonly string[] = ['approved', 'rejected', 'needs_approval'];
+const RECEIPT_STATUSES: readonly string[] = ['succeeded', 'pending', 'failed', 'refunded'];
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isDate = (v: unknown) => typeof v === 'string' && !Number.isNaN(Date.parse(v));
+
+/**
+ * Structural check of a parsed ledger file (F10). Returns a description of the
+ * first problem found, or undefined when the file is usable. Only fields the
+ * ledger and policy arithmetic rely on are checked; unknown extra fields are kept.
+ */
+function ledgerFileProblem(json: unknown): string | undefined {
+  if (!isObject(json)) return 'top level is not an object';
+  if (json.version !== 1) return `unsupported ledger file format (version ${JSON.stringify(json.version)})`;
+  if (!Array.isArray(json.entries)) return 'entries is not an array';
+  const ids = new Set<string>();
+  for (const [i, e] of json.entries.entries()) {
+    const at = `entries[${i}]`;
+    if (!isObject(e)) return `${at} is not an object`;
+    const intent = e.intent;
+    if (!isObject(intent)) return `${at}.intent is not an object`;
+    for (const key of ['id', 'agentId', 'payee', 'currency'] as const) {
+      if (typeof intent[key] !== 'string' || intent[key] === '') return `${at}.intent.${key} is not a non-empty string`;
+    }
+    if (typeof intent.amount !== 'number' || !Number.isFinite(intent.amount)) return `${at}.intent.amount is not a finite number`;
+    if (!isDate(intent.createdAt)) return `${at}.intent.createdAt is not a valid date`;
+    const id = intent.id as string;
+    if (ids.has(id)) return `${at}.intent.id ${JSON.stringify(id)} is duplicated`;
+    ids.add(id);
+    if (e.decision !== undefined && (!isObject(e.decision) || !DECISION_STATUSES.includes(e.decision.status as string))) {
+      return `${at}.decision has an unknown status`;
+    }
+    if (e.decisions !== undefined) {
+      if (!Array.isArray(e.decisions)) return `${at}.decisions is not an array`;
+      for (const [j, d] of e.decisions.entries()) {
+        if (!isObject(d) || !DECISION_STATUSES.includes(d.status as string)) return `${at}.decisions[${j}] has an unknown status`;
+        if (d.at !== undefined && !isDate(d.at)) return `${at}.decisions[${j}].at is not a valid date`;
+      }
+    }
+    if (e.paymentStatus !== undefined && !PAYMENT_STATUSES.includes(e.paymentStatus as string)) {
+      return `${at}.paymentStatus ${JSON.stringify(e.paymentStatus)} is unknown`;
+    }
+    if (e.receipt !== undefined) {
+      const r = e.receipt;
+      if (!isObject(r)) return `${at}.receipt is not an object`;
+      if (r.intentId !== id) return `${at}.receipt.intentId does not match the intent`;
+      if (!RECEIPT_STATUSES.includes(r.status as string)) return `${at}.receipt.status ${JSON.stringify(r.status)} is unknown`;
+    }
+    if (e.recordedAt !== undefined && !isDate(e.recordedAt)) return `${at}.recordedAt is not a valid date`;
+  }
+  return undefined;
 }
 
 /** True when the lock's holder pid is dead, or the lock is older than LOCK_STALE_MS. */
