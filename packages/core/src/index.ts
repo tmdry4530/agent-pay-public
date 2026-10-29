@@ -20,3 +20,4 @@ export { FailureCode, PaymentError, approve, reject, runPayment } from './orches
 export type { ApproveOptions, PaymentErrorCode, PaymentResult, RejectOptions, RunStatus } from './orchestrator.ts';
 export { reconcile, refreshIntent } from './reconcile.ts';
 export type { ReconcileSummary, RefreshResult } from './reconcile.ts';
+export { CURRENCY_DECIMALS, ceilMinorUnits, currencyDecimals, formatMinor, toMinorUnits } from './money.ts';

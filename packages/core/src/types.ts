@@ -76,4 +76,9 @@ export interface LedgerState {
    * of the ledger's server clock (Ledger) or of intent.createdAt (legacy ledgers).
    */
   dailyTotal: number;
+  /**
+   * The same total as exact integer minor units of the intent's currency (cents, yoctoNEAR).
+   * Set by Ledger; when absent evaluate derives it from dailyTotal, rounding up.
+   */
+  dailyTotalMinor?: bigint;
 }

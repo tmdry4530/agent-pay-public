@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { LedgerError } from './errors.ts';
+import { ceilMinorUnits, currencyDecimals } from './money.ts';
 import type { Decision, DecisionRecord, DecisionStatus, LedgerState, PaymentIntent, Receipt } from './types.ts';
 
 export type PaymentStatus = 'paid' | 'failed';
@@ -598,7 +599,9 @@ export function accountingDay(entry: LedgerEntry): string {
 function stateFor(file: LedgerFile, intent: PaymentIntent, now: Date): LedgerState {
   const day = utcDay(now);
   const currency = normalizeCurrency(intent.currency);
+  const decimals = currencyDecimals(currency);
   let total = 0;
+  let totalMinor = 0n;
   for (const e of file.entries) {
     if (
       e.intent.id !== intent.id &&
@@ -608,9 +611,10 @@ function stateFor(file: LedgerFile, intent: PaymentIntent, now: Date): LedgerSta
       accountingDay(e) === day
     ) {
       total += e.intent.amount;
+      if (decimals !== undefined) totalMinor += ceilMinorUnits(e.intent.amount, decimals)!;
     }
   }
-  return { dailyTotal: total };
+  return decimals === undefined ? { dailyTotal: total } : { dailyTotal: total, dailyTotalMinor: totalMinor };
 }
 
 function find(file: LedgerFile, intentId: string): LedgerEntry {

@@ -1,3 +1,4 @@
+import { ceilMinorUnits, currencyDecimals, formatMinor, toMinorUnits } from './money.ts';
 import type { Decision, LedgerState, PaymentIntent, Policy } from './types.ts';
 
 export const DEFAULT_CURRENCY = 'USD';
@@ -46,7 +47,18 @@ export function policyProblem(policy: Policy, ledgerState: LedgerState): string 
   if (typeof t !== 'number' || Number.isNaN(t) || t < 0) return `requireApprovalAbove must be a number >= 0, got ${String(t)}`;
   if (!Array.isArray(policy.allowedPayees)) return 'allowedPayees must be an array';
   if (policy.currency !== undefined && typeof policy.currency !== 'string') return 'currency must be a string';
+  const currency = (policy.currency ?? DEFAULT_CURRENCY).toUpperCase();
+  const decimals = currencyDecimals(currency);
+  if (decimals === undefined) return `currency "${currency}" is not supported (no minor-unit definition)`;
+  for (const key of ['perTxMax', 'dailyMax', 'requireApprovalAbove'] as const) {
+    const v = policy[key];
+    if (v !== Number.POSITIVE_INFINITY && toMinorUnits(v, decimals) === undefined) {
+      return `${key} ${v} has more than ${decimals} decimal places for ${currency}`;
+    }
+  }
   if (!isLimit(ledgerState?.dailyTotal)) return `ledger daily total must be a finite number >= 0, got ${String(ledgerState?.dailyTotal)}`;
+  const minor = ledgerState.dailyTotalMinor;
+  if (minor !== undefined && (typeof minor !== 'bigint' || minor < 0n)) return 'ledger daily total (minor units) must be a bigint >= 0';
   return undefined;
 }
 
@@ -70,20 +82,29 @@ export function evaluate(policy: Policy, intent: PaymentIntent, ledgerState: Led
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
     return reject(ReasonCode.InvalidAmount, `amount must be a finite number > 0, got ${String(amount)}`);
   }
+  // Limits and totals are compared in integer minor units (validated representable above).
+  const decimals = currencyDecimals(policyCurrency)!;
+  const amountMinor = toMinorUnits(amount, decimals);
+  if (amountMinor === undefined) {
+    return reject(ReasonCode.InvalidAmount, `${policyCurrency} allows at most ${decimals} decimal places, got ${amount}`);
+  }
   if (!policy.allowedPayees.includes(intent.payee)) {
     return reject(ReasonCode.PayeeNotAllowed, `payee "${intent.payee}" is not in the allowed list`);
   }
-  if (amount > policy.perTxMax) {
+  if (amountMinor > toMinorUnits(policy.perTxMax, decimals)!) {
     return reject(ReasonCode.PerTxLimitExceeded, `amount ${amount} exceeds per-transaction max ${policy.perTxMax}`);
   }
-  const projected = ledgerState.dailyTotal + amount;
-  if (projected > policy.dailyMax) {
+  const totalMinor = ledgerState.dailyTotalMinor ?? ceilMinorUnits(ledgerState.dailyTotal, decimals)!;
+  const projected = totalMinor + amountMinor;
+  if (projected > toMinorUnits(policy.dailyMax, decimals)!) {
+    const fmt = (m: bigint) => formatMinor(m, decimals);
     return reject(
       ReasonCode.DailyLimitExceeded,
-      `today's total ${ledgerState.dailyTotal} + ${amount} = ${projected} exceeds daily max ${policy.dailyMax}`,
+      `today's total ${fmt(totalMinor)} + ${fmt(amountMinor)} = ${fmt(projected)} exceeds daily max ${policy.dailyMax}`,
     );
   }
-  if (amount > policy.requireApprovalAbove) {
+  const threshold = policy.requireApprovalAbove;
+  if (threshold !== Number.POSITIVE_INFINITY && amountMinor > toMinorUnits(threshold, decimals)!) {
     return {
       status: 'needs_approval',
       reason: `${ReasonCode.ApprovalRequired}: amount ${amount} is above approval threshold ${policy.requireApprovalAbove}`,
