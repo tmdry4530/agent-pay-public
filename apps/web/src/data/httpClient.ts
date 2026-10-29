@@ -13,8 +13,11 @@ function trimBase(baseUrl: string): string {
 
 async function readError(res: Response): Promise<string> {
   try {
-    const body = (await res.json()) as { error?: string };
-    if (typeof body.error === 'string' && body.error.length > 0) return body.error;
+    const body = (await res.json()) as { error?: unknown; message?: unknown };
+    if (typeof body.error === 'string' && body.error.length > 0) {
+      if (typeof body.message === 'string' && body.message.length > 0) return `${body.error}: ${body.message}`;
+      return body.error;
+    }
   } catch {
     /* ignore */
   }

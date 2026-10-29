@@ -67,7 +67,7 @@ first, as `{status, reason, at, actor?}` (`actor` is `policy` or the approver). 
 **Today's totals** use the same rule as core: UTC day of `intent.createdAt`, entries that count toward the daily
 total (approved and not failed).
 
-**Refresh contract:** `404 intent_not_found`; `409 no_receipt` (no receipt on the entry, e.g. rejected); `409 receipt_not_pending` when the receipt is already settled (`succeeded` / `failed` / `refunded`) — **409 instead of 200 `changed: false`** so clients know the intent is final and can read `GET /ledger`; `409 status_unsupported` when the adapter has no `status()` or the receipt rail differs; `502 status_check_failed` when `status()` throws or returns an invalid receipt (nothing stored).
+**Refresh contract:** `404 intent_not_found`; `409 no_receipt` (no receipt on the entry, e.g. rejected); `409 receipt_not_pending` when the receipt is already settled (`succeeded` / `failed` / `refunded`) — **409 instead of 200 `changed: false`** so clients know the intent is final and can read `GET /ledger`; `409 status_unsupported` when the adapter has no `status()` or the receipt rail differs. An entry flagged `needsManualResolve` (or a pending receipt whose `meta.needsManualResolve` is `true` / `"true"` when refresh already refuses with `status_unsupported`) is also `409 status_unsupported`, and `message` tells the caller to use `POST /intents/<id>/resolve` with that intent id. `502 status_check_failed` when `status()` throws or returns an invalid receipt (nothing stored).
 
 **Resolve contract (operator, `POST /intents/:id/resolve`):** for pending receipts that `status()` cannot settle, e.g. PayPal
 receipts with `meta.needsManualResolve: "true"` (duplicate `sender_batch_id` guesses, 5xx / network errors with no batch id,
@@ -86,11 +86,22 @@ batches with 2+ items). The route never calls the adapter (`pay()` or `status()`
   (already settled, including a second resolve).
 - No auth: like the rest of this demo API it is meant for localhost only; `resolvedBy` is self-reported.
 
-**Status codes:** `400` `invalid_body` / `invalid_json` / `invalid_path` / `invalid_header`; `403` `forbidden_origin` (disallowed
-`Origin` on non-safe methods); `404` `not_found` (route) or
-`intent_not_found`; `405` `method_not_allowed` (with `Allow`); `409` `already_paid`, `not_pending`, `in_progress`,
-`intent_conflict`, `no_receipt`, `receipt_not_pending`, `status_unsupported`; `502` `status_check_failed`; `413` `payload_too_large` (body cap 64 KiB); `500` `internal_error`. Policy rejections are not
-HTTP errors: they come back as `status: "rejected"` results.
+**Error body:** every error response is JSON `{"error":"<code>","message":"<detail>"}` with `Content-Type: application/json`. `error` is a bare machine code (no `:`). `message` is the detail after `"<code>: "` on `ValidationError`, `HttpError`, `PaymentError`, and `LedgerError` (if there is no detail, `message` is the code). Unknown errors are `500` `{"error":"internal_error","message":"unexpected server error"}` and do not include the thrown message. If the last-resort handler finds headers already sent, it ends the response without a second body.
+
+| Status | `error` codes |
+| --- | --- |
+| 400 | `invalid_body`, `invalid_json`, `invalid_path`, `invalid_header`, `invalid_input` |
+| 403 | `forbidden_origin` |
+| 404 | `not_found` (route or ledger), `intent_not_found` |
+| 405 | `method_not_allowed` (`Allow` header) |
+| 409 | `already_paid`, `not_pending`, `in_progress`, `intent_conflict`, `no_receipt`, `receipt_not_pending`, `status_unsupported`, `precondition_failed`, `duplicate_intent` |
+| 413 | `payload_too_large` (body cap 64 KiB) |
+| 415 | `unsupported_media_type` (non-empty body whose `Content-Type` is not `application/json`, including a missing type) |
+| 500 | `internal_error` |
+| 502 | `status_check_failed` |
+| 503 | `lock_timeout` (`Retry-After: 1`, message says to retry), `ledger_corrupt`, `ledger_missing` |
+
+Policy rejections are not HTTP errors: they come back as `status: "rejected"` results.
 
 **CORS:** only `http://localhost:<port>` and `http://127.0.0.1:<port>` origins are echoed in
 `Access-Control-Allow-Origin` (with `Vary: Origin`). `OPTIONS` answers `204` with `Allow`; for an allowed origin it
@@ -98,7 +109,7 @@ adds `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers: Content-Type
 get no CORS headers.
 
 **Origin (CSRF):** for methods other than `GET`, `HEAD`, and `OPTIONS`, if the request sends an `Origin` header that
-is not allowed, the server responds `403` `forbidden_origin: …` before the route handler runs or the body is read;
+is not allowed, the server responds `403` `{"error":"forbidden_origin","message":…}` before the route handler runs or the body is read;
 requests with no `Origin` are unchanged.
 
 ## Adapter registry
