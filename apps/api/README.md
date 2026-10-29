@@ -35,10 +35,10 @@ At startup, `railSeed(RAIL, process.env)` selects policy limits, currency, amoun
 
 ## Policy
 Kept **in memory** (one policy, one agent), seeded from `railSeed` (mock uses exported `DEFAULT_POLICY` unchanged):
-`PUT /policy` replaces it until restart. The ledger is on disk; the policy is not.
+`PUT /policy` replaces it until restart. After the JSON shape check, the next policy is passed to core `policyProblem` with `{ dailyTotal: 0 }`. A problem is `400 {"error":"invalid_policy","message":"<problem>"}` and the active policy is left unchanged. The ledger is on disk; the policy is not.
 
 ## Endpoints
-All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
+All bodies are JSON. Errors are `{"error": "<code>", "message": "<detail>"}`.
 
 | method & path | request | response |
 |---|---|---|
@@ -49,12 +49,12 @@ All bodies are JSON. Errors are `{"error": "<code>: <detail>"}`.
 | `POST /intents/:id/reject` | optional `{approver?, note?}` | `200 PaymentResult` (`rejected`, reason `rejected_by_human: …`) |
 | `POST /intents/:id/refresh` | optional empty body | `200 PaymentResult & {changed: boolean}` — polls the adapter's `status()` for a **pending** receipt on this rail; settles the ledger when the rail reports `succeeded` or `failed`. Still `pending` → `changed: false`, no ledger write. |
 | `POST /intents/:id/resolve` | `{status: succeeded\|failed\|refunded, note, resolvedBy, externalId?}` | `200 PaymentResult & {changed: true, resolution}` — operator settles a **pending** receipt by hand; never calls the adapter (see below) |
-| `GET /ledger` | | `200 {entries: LedgerEntry[], today: {day: "YYYY-MM-DD" (UTC), totals: {[agentId]: number}}}` |
+| `GET /ledger` | | `200 {entries: LedgerEntry[], today: {day: "YYYY-MM-DD", totals: {[agentId]: {[currency]: number}}}}` |
 | `GET /policy` | | `200 Policy` |
-| `PUT /policy` | full `Policy` | `200 Policy` |
+| `PUT /policy` | full `Policy` | `200 Policy`, or `400 invalid_policy` (active policy unchanged) |
 
 **Client-supplied intent fields:** `agentId`, `payee`, `amount` (finite number > 0), `currency`, `purpose` are
-required. `id` (1–128 chars of `[A-Za-z0-9._:-]`) and `createdAt` (ISO 8601 with a zone) are optional; the server
+required. If `currencyDecimals(currency)` is defined and `amount` has more decimal places than that (`toMinorUnits` is undefined), the response is `400 {"error":"invalid_amount","message":…}` before any ledger write or `pay()`. Unknown currencies are not rejected here; core evaluates them. `id` (1–128 chars of `[A-Za-z0-9._:-]`) and `createdAt` (ISO 8601 with a zone) are optional; the server
 fills in `pi_<uuid>` and the current time. Unknown fields are rejected. Core replay needs a deep-equal intent, so a
 different body for the same id is `409 intent_conflict`. Optional header `Idempotency-Key` uses the same charset as
 `id` (invalid → `400 invalid_header`). When the body omits `id`, that key is the intent id; when both are set they
@@ -64,8 +64,7 @@ reuses the stored `createdAt` so the retry replays.
 **`GET /ledger` entries** are core `LedgerEntry` objects as stored, including `decisions`: every decision, oldest
 first, as `{status, reason, at, actor?}` (`actor` is `policy` or the approver). `decision` is still the latest one.
 
-**Today's totals** use the same rule as core: UTC day of `intent.createdAt`, entries that count toward the daily
-total (approved and not failed).
+**Today's totals:** `today.day` is the accounting day of the injected clock (the UTC day core's `accountingDay` assigns to an approval at that instant). `today.totals` is keyed by `agentId` for agents present in the ledger; each value is `Ledger.dailyTotals(agentId, day)` (upper-case currency → amount). There is no currency scalar and no `totalsByCurrency` field. Buckets follow core (approval time, not `intent.createdAt`).
 
 **Refresh contract:** `404 intent_not_found`; `409 no_receipt` (no receipt on the entry, e.g. rejected); `409 receipt_not_pending` when the receipt is already settled (`succeeded` / `failed` / `refunded`) — **409 instead of 200 `changed: false`** so clients know the intent is final and can read `GET /ledger`; `409 status_unsupported` when the adapter has no `status()` or the receipt rail differs. An entry flagged `needsManualResolve` (or a pending receipt whose `meta.needsManualResolve` is `true` / `"true"` when refresh already refuses with `status_unsupported`) is also `409 status_unsupported`, and `message` tells the caller to use `POST /intents/<id>/resolve` with that intent id. `502 status_check_failed` when `status()` throws or returns an invalid receipt (nothing stored).
 
@@ -90,7 +89,7 @@ batches with 2+ items). The route never calls the adapter (`pay()` or `status()`
 
 | Status | `error` codes |
 | --- | --- |
-| 400 | `invalid_body`, `invalid_json`, `invalid_path`, `invalid_header`, `invalid_input` |
+| 400 | `invalid_body`, `invalid_json`, `invalid_path`, `invalid_header`, `invalid_input`, `invalid_amount`, `invalid_policy` |
 | 403 | `forbidden_origin` |
 | 404 | `not_found` (route or ledger), `intent_not_found` |
 | 405 | `method_not_allowed` (`Allow` header) |

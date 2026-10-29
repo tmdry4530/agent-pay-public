@@ -4,12 +4,14 @@ import {
   Ledger,
   LedgerError,
   PaymentError,
+  accountingDay,
   approve,
-  countsTowardDailyTotal,
+  currencyDecimals,
+  policyProblem,
   reject,
   refreshIntent,
   runPayment,
-  utcDay,
+  toMinorUnits,
   type LedgerEntry,
   type LedgerErrorCode,
   type PaymentAdapter,
@@ -133,6 +135,7 @@ export function createApp(options: AppOptions) {
           const raw = await readJson(req);
           const idempotencyKey = parseIdempotencyKey(req.headers['idempotency-key']);
           const intent = parseIntentBody(raw, { id: newId, now, idempotencyKey });
+          rejectExcessAmountDecimals(intent.amount, intent.currency);
           if (shouldReuseStoredCreatedAt(raw, idempotencyKey)) {
             const existing = await ledger.get(intent.id);
             if (existing) intent.createdAt = existing.intent.createdAt;
@@ -186,13 +189,16 @@ export function createApp(options: AppOptions) {
       methods: {
         GET: async () => {
           const entries = await ledger.list();
-          const day = utcDay(now());
-          const byAgent: Record<string, number> = {};
+          const day = accountingDayForClock(now());
+          const totals: Record<string, Record<string, number>> = {};
+          const seen = new Set<string>();
           for (const e of entries) {
-            if (utcDay(e.intent.createdAt) !== day || !countsTowardDailyTotal(e)) continue;
-            byAgent[e.intent.agentId] = (byAgent[e.intent.agentId] ?? 0) + e.intent.amount;
+            const agentId = e.intent.agentId;
+            if (seen.has(agentId)) continue;
+            seen.add(agentId);
+            totals[agentId] = await ledger.dailyTotals(agentId, day);
           }
-          return { status: 200, body: { entries, today: { day, totals: byAgent } } };
+          return { status: 200, body: { entries, today: { day, totals } } };
         },
       },
     },
@@ -201,7 +207,10 @@ export function createApp(options: AppOptions) {
       methods: {
         GET: async () => ({ status: 200, body: policy }),
         PUT: async (req) => {
-          policy = parsePolicy(await readJson(req));
+          const next = parsePolicy(await readJson(req));
+          const problem = policyProblem(next, { dailyTotal: 0 });
+          if (problem !== undefined) throw new ValidationError('invalid_policy', problem);
+          policy = next;
           return { status: 200, body: policy };
         },
       },
@@ -272,6 +281,39 @@ export function createApp(options: AppOptions) {
 /** createApp + node:http server (not listening yet). */
 export function createServer(options: AppOptions): Server {
   return createHttpServer(createApp(options).listener);
+}
+
+/**
+ * UTC day core accounts a spend to when it is approved at `at`.
+ * `accountingDay` reads the approved decision time, else `recordedAt`, else `createdAt`.
+ */
+function accountingDayForClock(at: Date): string {
+  const iso = at.toISOString();
+  return accountingDay({
+    intent: {
+      id: 'clock',
+      agentId: 'clock',
+      payee: 'clock',
+      amount: 1,
+      currency: 'USD',
+      purpose: 'clock',
+      createdAt: iso,
+    },
+    decisions: [{ status: 'approved', reason: 'within_policy: clock', at: iso }],
+    recordedAt: iso,
+    updatedAt: iso,
+  });
+}
+
+/** 400 invalid_amount when `amount` has more fraction digits than the currency. Unknown currencies are left to core. */
+function rejectExcessAmountDecimals(amount: number, currency: string): void {
+  const decimals = currencyDecimals(currency);
+  if (decimals === undefined) return;
+  if (toMinorUnits(amount, decimals) !== undefined) return;
+  throw new ValidationError(
+    'invalid_amount',
+    `${currency.toUpperCase()} allows at most ${decimals} decimal places, got ${amount}`,
+  );
 }
 
 /** True when createdAt was omitted and the id comes from the body or Idempotency-Key. */
