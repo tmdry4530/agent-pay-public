@@ -64,3 +64,34 @@ describe('CSS text color tokens on surfaces', () => {
     expect(contrastRatio(fg, colors.surface2)).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+describe('CSS guard-instrument text tokens', () => {
+  const css = readFileSync(appCssPath, 'utf8');
+  const guardVars: Record<string, keyof typeof colors> = {
+    '--g-text': 'gText',
+    '--g-muted': 'gMuted',
+    '--g-pass': 'gPass',
+    '--g-hold': 'gHold',
+    '--g-stop': 'gStop',
+  };
+  const used = collectTextColorVars(css).filter((v) => guardVars[v]);
+
+  it('uses at least one guard text token', () => {
+    expect(used.length).toBeGreaterThan(0);
+  });
+
+  it.each(used)('var(%s) on --guard and --guard-track ≥ 4.5:1', (cssVar) => {
+    const fg = colors[guardVars[cssVar]!];
+    expect(contrastRatio(fg, colors.guard)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(fg, colors.guardTrack)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe('page-level text tokens', () => {
+  it.each(['text', 'muted', 'accentText', 'success', 'danger', 'warn', 'badgeWarn'] as const)(
+    '%s on the page background ≥ 4.5:1',
+    (key) => {
+      expect(contrastRatio(colors[key], colors.bg)).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+});

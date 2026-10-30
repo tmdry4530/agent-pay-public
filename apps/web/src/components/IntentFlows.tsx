@@ -58,7 +58,7 @@ export function IntentFlows({ entries, now, onOpenResolve }: Props) {
 
   return (
     <div className="panel intent-flows-panel" data-testid="intent-flows">
-      <h2>Intents</h2>
+      <h2 className="panel__title">Intents</h2>
       {sorted.length === 0 ? (
         <p className="hint">Complete a scenario to see intent progress here.</p>
       ) : (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ReasonCode, reasonCode } from '@agent-pay/core/policy.ts';
 import { PaymentError } from '@agent-pay/core/orchestrator.ts';
 import { ApiError, apiErrorCode } from './data/apiError';
@@ -56,6 +56,18 @@ function formatMoney(amount: number, currency: string): string {
     }).format(amount);
   } catch {
     return `${amount} ${currency}`;
+  }
+}
+
+function formatWhole(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch {
+    return `${amount}`;
   }
 }
 
@@ -210,6 +222,8 @@ export default function App({ clock = systemClock }: AppProps) {
   const dailyMax = policy?.dailyMax ?? 0;
   const perTxMax = policy?.perTxMax ?? 0;
   const requireApprovalAbove = policy?.requireApprovalAbove ?? 0;
+  const pctNum = (v: number) => (dailyMax > 0 ? Math.min(100, Math.max(0, (v / dailyMax) * 100)) : 0);
+  const spentPct = pctNum(spentToday);
 
   const serverNowDate = useMemo(
     () => serverNow(now, client.serverClockOffsetMs?.() ?? 0),
@@ -571,6 +585,8 @@ export default function App({ clock = systemClock }: AppProps) {
     !paymentResolution;
   const canReset = client.kind === 'mock' && client.reset !== undefined;
 
+  const activeRail = client.kind === 'http' ? serverRail : rail;
+
   const headerBadge =
     client.kind === 'http'
       ? `API: ${apiBase}`
@@ -599,27 +615,57 @@ export default function App({ clock = systemClock }: AppProps) {
 
   const payBlocked = pipelineDisabled || !!showRailBanner;
 
+  // Per-payment scale: three lanes of equal width; the marker shows where the selected task lands.
+  const selectedAmount = intent?.amount ?? scenario?.task.amount ?? null;
+  const lanePos =
+    selectedAmount == null
+      ? null
+      : selectedAmount <= requireApprovalAbove
+        ? (requireApprovalAbove > 0 ? selectedAmount / requireApprovalAbove : 0) * (100 / 3)
+        : selectedAmount <= perTxMax
+          ? 100 / 3 +
+            ((selectedAmount - requireApprovalAbove) / Math.max(1, perTxMax - requireApprovalAbove)) * (100 / 3)
+          : (100 / 3) * 2.5;
+  const laneIdx = lanePos == null ? -1 : Math.min(2, Math.floor(lanePos / (100 / 3 + 0.0001)));
+
   return (
     <div className="app">
       <header className="header">
-        <div className="header__brand">
-          <span className="logo-mark" aria-hidden>
-            AP
-          </span>
-          <div>
-            <h1>agent-pay</h1>
-            <p className="tagline">AI agents pay within spending policy</p>
+        <div className="header__inner">
+          <div className="header__brand">
+            <span className="logo-mark" aria-hidden>
+              <svg viewBox="0 0 32 32" width="100%" height="100%" focusable="false">
+                <rect width="32" height="32" rx="8" fill="currentColor" />
+                <path d="M10 7v18M22 7v18" stroke="#f4f6ff" strokeWidth="2.6" strokeLinecap="round" />
+                <path d="M2.5 16h5M24.5 16h5" stroke="#b9c3f0" strokeWidth="2" strokeLinecap="round" />
+                <circle cx="16" cy="16" r="3.4" fill="#ffc857" />
+              </svg>
+            </span>
+            <div>
+              <h1>agent-pay</h1>
+              <p className="tagline">AI agents pay within spending policy</p>
+            </div>
+          </div>
+          <div className="header__env">
+            {activeRail && (
+              <span className="env-rail">
+                <i className="env-rail__dot" aria-hidden />
+                Rail: {activeRail}
+              </span>
+            )}
+            <span className="mock-badge" title={headerBadge}>
+              {headerBadge}
+            </span>
           </div>
         </div>
-        <span className="mock-badge" title={headerBadge}>
-          {headerBadge}
-        </span>
       </header>
 
       <main className="layout">
         <section className="panel scenarios">
-          <h2>Demo scenarios</h2>
-          <p className="hint">Pick a task, then walk the payment pipeline.</p>
+          <div className="scenarios__head">
+            <h2 className="panel__title">Demo scenarios</h2>
+            <p className="hint">Pick a task, then walk the payment pipeline.</p>
+          </div>
           <div className="scenario-grid">
             {DEMO_SCENARIOS.map((s) => (
               <button
@@ -653,7 +699,7 @@ export default function App({ clock = systemClock }: AppProps) {
         </section>
 
         <section className="panel flow">
-          <h2>Payment pipeline</h2>
+          <h2 className="panel__title">Payment pipeline</h2>
 
           {client.kind === 'http' && !apiConnected && (
             <ApiStatusBanner
@@ -680,6 +726,7 @@ export default function App({ clock = systemClock }: AppProps) {
             </div>
           )}
 
+          <div className="controls">
           <div className="rail-toggle" role="group" aria-label="Payment rail">
             {(['mock', 'paypal', 'near'] as const).map((r) => {
               const isHttp = client.kind === 'http';
@@ -724,10 +771,20 @@ export default function App({ clock = systemClock }: AppProps) {
             >
               Run policy check &amp; pay
             </ActionButton>
-            {result?.status === 'needs_approval' &&
+          </div>
+          </div>
+
+          {result?.status === 'needs_approval' &&
               reasonCode(result.decision) !== ReasonCode.ApprovedByHuman &&
               reasonCode(result.decision) !== ReasonCode.RejectedByHuman && (
-                <>
+                <div className="approval-gate" role="group" aria-label="Human decision">
+                  <div className="approval-gate__copy">
+                    <p className="approval-gate__title">Human sign-off required</p>
+                    <p className="approval-gate__text">
+                      Policy held this payment for a person to release or refuse.
+                    </p>
+                  </div>
+                  <div className="approval-gate__buttons">
                   <ActionButton
                     className="btn-success"
                     data-testid="btn-approve"
@@ -746,9 +803,9 @@ export default function App({ clock = systemClock }: AppProps) {
                   >
                     Deny
                   </ActionButton>
-                </>
+                  </div>
+                </div>
               )}
-          </div>
 
           {actionError && (
             <ErrorBanner
@@ -758,6 +815,7 @@ export default function App({ clock = systemClock }: AppProps) {
             />
           )}
 
+          <div className="results">
           {quoteIntent && (
             <div className="quote-card" data-testid="quote-card">
               <h3>PaymentIntent (draft)</h3>
@@ -904,6 +962,7 @@ export default function App({ clock = systemClock }: AppProps) {
               )}
             </article>
           )}
+          </div>
 
           {resolveSuccess && (
             <p className="resolve-success status-banner" data-testid="resolve-success" role="status">
@@ -937,29 +996,64 @@ export default function App({ clock = systemClock }: AppProps) {
 
         <aside className="sidebar">
           <div className="panel gauge-panel" data-testid="gauge">
-            <h2>Spending limit</h2>
+            <h2 className="panel__title">Spending limit</h2>
             {initialLoading ? (
               <GaugeSkeleton testId="gauge-loading" label="gauge" />
             ) : !apiConnected ? (
               <p className="hint unavailable">Spending data unavailable — API not connected.</p>
             ) : (
               <>
-                <p className="cap-note">
-                  Per-tx max {formatMoney(perTxMax, currency)} · approval above{' '}
-                  {formatMoney(requireApprovalAbove, currency)}
+                <p className="gauge__readout">
+                  <span className="gauge__spent">
+                    Spent today <strong>{formatMoney(spentToday, currency)}</strong>
+                  </span>
                 </p>
-                <div className="gauge">
-                  <div
-                    className="gauge__fill"
-                    style={{
-                      width: `${dailyMax > 0 ? Math.min(100, (spentToday / dailyMax) * 100) : 0}%`,
-                    }}
-                  />
+                <div
+                  className={`gauge${spentPct >= 100 ? ' is-full' : spentPct >= 80 ? ' is-warn' : ''}`}
+                  role="meter"
+                  aria-label="Spent today against daily max"
+                  aria-valuemin={0}
+                  aria-valuemax={dailyMax}
+                  aria-valuenow={Math.min(spentToday, dailyMax)}
+                >
+                  <div className="gauge__fill" style={{ width: `${spentPct}%` }} />
                 </div>
                 <p className="gauge__labels">
-                  <span>Spent today {formatMoney(spentToday, currency)}</span>
                   <span>Daily max {formatMoney(dailyMax, currency)}</span>
+                  <span>{formatMoney(Math.max(0, dailyMax - spentToday), currency)} left</span>
                 </p>
+                <section className="paycheck" aria-labelledby="paycheck-title">
+                  <h3 className="paycheck__title" id="paycheck-title">
+                    Per-payment rules
+                  </h3>
+                  <p className="paycheck__sub">Each payment is judged alone, not against the daily total.</p>
+                  <div
+                    className={`paycheck__scale${lanePos == null ? ' paycheck__scale--bare' : ''}`}
+                    style={lanePos == null ? undefined : ({ '--pos': `${lanePos}%` } as CSSProperties)}
+                  >
+                    {selectedAmount != null && lanePos != null && (
+                      <>
+                        <span className="paycheck__flag" data-testid="paycheck-marker">
+                          This task {formatMoney(selectedAmount, currency)}
+                        </span>
+                        <i className="paycheck__pin" aria-hidden />
+                      </>
+                    )}
+                    <div className="paycheck__lanes">
+                      <span className={`lane lane--auto${laneIdx === 0 ? ' is-on' : ''}`}>Auto-pay</span>
+                      <span className={`lane lane--human${laneIdx === 1 ? ' is-on' : ''}`}>Sign-off</span>
+                      <span className={`lane lane--stop${laneIdx === 2 ? ' is-on' : ''}`}>Rejected</span>
+                    </div>
+                    <div className="paycheck__rules" aria-hidden>
+                      <span>up to {formatWhole(requireApprovalAbove, currency)}</span>
+                      <span>
+                        {formatWhole(requireApprovalAbove, currency)}–{formatWhole(perTxMax, currency)}
+                      </span>
+                      <span>over {formatWhole(perTxMax, currency)}</span>
+                    </div>
+                  </div>
+                  {selectedAmount == null && <p className="paycheck__empty">Pick a scenario to see its lane.</p>}
+                </section>
                 {showTotalsByCurrency && (
                   <dl className="totals-by-currency" data-testid="totals-by-currency">
                     <dt>Today by currency</dt>
@@ -981,7 +1075,7 @@ export default function App({ clock = systemClock }: AppProps) {
           </div>
 
           <div className="panel ledger-panel" data-testid="ledger">
-            <h2>Ledger</h2>
+            <h2 className="panel__title">Ledger</h2>
             {initialLoading ? (
               <LedgerSkeleton testId="ledger-loading" label="ledger" />
             ) : !apiConnected ? (
