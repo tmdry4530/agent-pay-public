@@ -129,7 +129,7 @@ async function caption(page, text) {
       el = document.createElement('div');
       el.id = 'demo-caption';
       el.style.cssText =
-        'position:fixed;top:12px;left:50%;transform:translateX(-50%);' +
+        'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);' +
         'background:rgba(0,0,0,0.75);color:#fff;font:20px/1.4 system-ui,sans-serif;' +
         'padding:12px 20px;border-radius:12px;z-index:9999;pointer-events:none;' +
         'max-width:760px;text-align:center;';
