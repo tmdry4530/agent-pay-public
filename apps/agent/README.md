@@ -139,23 +139,34 @@ deploy), near/gpu/compute → near-compute (5 USD per hour), and plain tokens/in
 like `1M tokens`, `500k tokens`, `2.5M`, `3 hours`, `2 deploys` are parsed; the default is 1. No match throws
 `PlannerError` (exit 1). Pass a custom table with `new RuleBasedPlanner(table)`.
 
-**LLM planner:** `createPlanner('llm')` (CLI `--planner llm`) returns `OpenRouterPlanner`
-([src/openrouter-planner.ts](src/openrouter-planner.ts)). It POSTs to OpenRouter Chat Completions
-(`https://openrouter.ai/api/v1/chat/completions`) with plain `fetch`. The key comes from `OPENROUTER_API_KEY`
-and the model from `OPENROUTER_MODEL` (default `openai/gpt-4o-mini`). The request has a 15 s timeout and asks
-for a JSON `{payee, amount, currency, purpose}`, which is schema-checked. The planner falls back to
-`RuleBasedPlanner` when:
+**LLM planner:** `createPlanner('llm')` (CLI `--planner llm`) returns an `LlmPlanner`, defined in
+[src/llm-planner.ts](src/llm-planner.ts). It is one OpenAI-compatible Chat Completions client, configured by
+an `LlmProviderConfig`:
 
+| Provider | Key | Model (default) | URL |
+|---|---|---|---|
+| `OPENAI_PROVIDER` | `OPENAI_API_KEY` | `OPENAI_MODEL` (`gpt-4o-mini`) | `https://api.openai.com/v1/chat/completions` |
+| `OPENROUTER_PROVIDER` | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` (`openai/gpt-4o-mini`) | `https://openrouter.ai/api/v1/chat/completions` |
+
+`createLlmPlannerFromEnv` takes the first provider in `LLM_PROVIDERS` (OpenAI, then OpenRouter) whose key is
+non-blank. If neither key is set, it returns an `LlmPlanner` named `llm` that plans by the rules and sends no
+request. `OpenAIPlanner` and `OpenRouterPlanner` pin one provider each.
+
+The request uses plain `fetch` with a 15 s timeout and asks for a JSON `{payee, amount, currency, purpose}`.
+The answer is schema-checked. The planner falls back to `RuleBasedPlanner` when:
 - the key is missing (no request is sent);
 - the HTTP status is not 2xx;
 - a network error or timeout occurs;
 - the JSON is malformed;
-- the output is off-schema.
+- the output fails the schema check.
 
-The quote carries `trace: { planner, model?, fallback?: { from, reason } }`, and the `quote` step emits it as
-`plannerTrace`. The key never appears in it: error text is redacted. The LLM only proposes. The API's policy
-engine still rejects over-limit or non-allowlisted proposals and holds large ones for approval; tests cover
-this with a mocked fetch.
+It never retries on the other provider.
+
+The quote carries `trace: { planner, provider?, model?, fallback?: { from, reason } }`, and the `quote` step
+emits it as `plannerTrace`. `redactLlmSecrets` strips the key from error text, along with any `sk-…`,
+`sk-proj-…` or `sk-or-…` string and Bearer values. The LLM only proposes: the API's policy engine still
+rejects over-limit or non-allowlisted proposals and holds large ones for approval. Tests cover this with a
+mocked fetch.
 
 ## In-process
 

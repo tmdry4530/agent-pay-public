@@ -71,7 +71,7 @@ export interface RunAgentOptions {
   autoApproveAs?: string;
   /** Pause before the simulated approval so the wait step is visible. Default 0. */
   approveDelayMs?: number;
-  /** Defaults to RuleBasedPlanner. `createPlanner('llm')` gives the OpenRouter planner (rule-based fallback). */
+  /** Defaults to RuleBasedPlanner. `createPlanner('llm')` gives the OpenAI / OpenRouter planner (rule-based fallback). */
   planner?: Planner;
   /** Call GET /health before anything else and fail fast (exit 1) if the API is down. Default true. */
   healthCheck?: boolean;

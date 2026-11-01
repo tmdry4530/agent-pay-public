@@ -1,4 +1,4 @@
-import { OpenRouterPlanner } from './openrouter-planner.ts';
+import { createLlmPlannerFromEnv } from './llm-planner.ts';
 
 /** What the agent wants to pay for. Becomes the body of POST /intents (plus agentId). */
 export interface Quote {
@@ -12,8 +12,10 @@ export interface Quote {
 }
 
 export interface PlanTrace {
-  /** Planner that produced the quote, e.g. `openrouter` or `rule-based`. */
+  /** Planner that produced the quote: `openai`, `openrouter` or `rule-based`. */
   planner: string;
+  /** LLM provider that was selected (`openai` | `openrouter`), also on a fallback. Absent when no key was set. */
+  provider?: string;
   /** LLM model id when an LLM planner was involved. */
   model?: string;
   /** Set when an LLM planner fell back to the rule-based planner. Never contains the API key. */
@@ -29,7 +31,7 @@ export interface PlannerContext {
 /**
  * Turns a free-text task into a Quote.
  *
- * `RuleBasedPlanner` (default) is deterministic. `OpenRouterPlanner` (openrouter-planner.ts, `createPlanner('llm')`)
+ * `RuleBasedPlanner` (default) is deterministic. `LlmPlanner` (llm-planner.ts, `createPlanner('llm')`: OpenAI or OpenRouter)
  * asks an LLM for `{ payee, amount, currency, purpose }`, validates it, and falls back to the rules on any problem.
  * Either way the API's policy engine decides; a planner only proposes.
  */
@@ -42,7 +44,7 @@ export class PlannerError extends Error {
   override name = 'PlannerError';
 }
 
-/** `rule` = RuleBasedPlanner; `llm` = OpenRouterPlanner with rule-based fallback. */
+/** `rule` = RuleBasedPlanner; `llm` = OpenAI, else OpenRouter, by which key is set; rule-based fallback. */
 export type PlannerKind = 'rule' | 'llm';
 
 type Unit = 'token' | 'hour' | 'deploy';
@@ -124,24 +126,21 @@ export class RuleBasedPlanner implements Planner {
 }
 
 export interface CreatePlannerOptions {
-  /** Environment to read OPENROUTER_API_KEY / OPENROUTER_MODEL from. Default process.env. */
+  /** Environment to read OPENAI_* / OPENROUTER_* from. Default process.env. */
   env?: Readonly<Record<string, string | undefined>>;
   /** Injected fetch for the LLM planner (tests). */
   fetch?: typeof fetch;
   timeoutMs?: number;
 }
 
-/** Planner factory. `llm` reads OPENROUTER_API_KEY and OPENROUTER_MODEL; without a key it plans by the rules. */
+/**
+ * Planner factory. `llm` uses OpenAI when OPENAI_API_KEY is set (model OPENAI_MODEL), else OpenRouter when
+ * OPENROUTER_API_KEY is set (model OPENROUTER_MODEL), else plans by the rules without any request.
+ */
 export function createPlanner(kind: PlannerKind = 'rule', options: CreatePlannerOptions = {}): Planner {
   if (kind === 'rule') return new RuleBasedPlanner();
   if (kind === 'llm') {
-    const env = options.env ?? process.env;
-    return new OpenRouterPlanner({
-      apiKey: env.OPENROUTER_API_KEY,
-      model: env.OPENROUTER_MODEL,
-      fetch: options.fetch,
-      timeoutMs: options.timeoutMs,
-    });
+    return createLlmPlannerFromEnv(options.env ?? process.env, { fetch: options.fetch, timeoutMs: options.timeoutMs });
   }
   throw new PlannerError(`unknown_planner: ${String(kind)} (expected rule | llm)`);
 }

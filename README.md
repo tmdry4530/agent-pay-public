@@ -235,40 +235,59 @@ the rail's per-transaction max (100 USD / 1 NEAR). Otherwise the API exits 1 wit
 `needs_approval`, so a live demo can show human approval while spending very little. `npm run demo` passes it
 through from the shell (`DEMO_APPROVAL_ABOVE=5 npm run demo`).
 
-### LLM planner (optional, OpenRouter)
+### LLM planner (optional, OpenAI or OpenRouter)
 
-The agent CLI's default planner is the deterministic price table. `--planner llm` asks an LLM through
-OpenRouter's Chat Completions API (`https://openrouter.ai/api/v1/chat/completions`, plain `fetch`, no SDK) to
-turn the task into a `{payee, amount, currency, purpose}` proposal:
+By default the agent CLI plans with a fixed price table. With `--planner llm` it asks an LLM to turn the task
+into a `{payee, amount, currency, purpose}` proposal. The request goes to an OpenAI-compatible Chat
+Completions API using plain `fetch`, with no SDK. The provider depends on which key is set:
+
+1. `OPENAI_API_KEY` set: OpenAI, `https://api.openai.com/v1/chat/completions`. The model comes from
+   `OPENAI_MODEL` and defaults to `gpt-4o-mini`.
+2. Otherwise, `OPENROUTER_API_KEY` set: OpenRouter, `https://openrouter.ai/api/v1/chat/completions`. The
+   model comes from `OPENROUTER_MODEL` and defaults to `openai/gpt-4o-mini`.
+3. Otherwise: the rule-based planner, and no request is sent.
+
+A key that is set but blank counts as unset.
 
 ```sh
-export OPENROUTER_API_KEY=<your-openrouter-key>     # shell env only; never commit it
-# optional: OPENROUTER_MODEL=<openrouter model id>   # default openai/gpt-4o-mini
+export OPENAI_API_KEY=<your-openai-key>             # shell env only; never commit it
+# or: export OPENROUTER_API_KEY=<your-openrouter-key>
+# optional: OPENAI_MODEL=<model id> / OPENROUTER_MODEL=<openrouter model id>
 npm run agent -- --planner llm --task "buy 2M tokens of Claude inference"
 ```
 
-- **The LLM only proposes; the policy decides.** The proposal is schema-checked:
+**The LLM only proposes; the policy decides.**
+- The proposal is schema-checked before it is used:
   - the payee must be a plain id;
-  - the amount must be a positive number with at most 2 decimals;
-  - the currency must equal the requested one;
+  - the amount must be above 0 with at most 2 decimals;
+  - the currency must match the requested one;
   - the purpose must be non-empty.
+- It is then submitted as an ordinary intent. The API's policy engine still:
+  - rejects an over-limit amount;
+  - rejects a payee outside the allowlist;
+  - holds an amount above the approval threshold for a human.
+- The provider and model are appended to the intent's `purpose`. The code is in
+  [`apps/agent/src/llm-planner.ts`](apps/agent/src/llm-planner.ts).
 
-  It is then submitted as an ordinary intent. The API's policy engine still rejects an over-limit amount or a
-  payee outside the allowlist, and holds an amount above the approval threshold for a human.
-  [`apps/agent/src/openrouter-planner.ts`](apps/agent/src/openrouter-planner.ts) appends the model id to the
-  intent's `purpose`.
-- **Fallback.** In any of these cases the agent plans with the rule-based table instead:
-  - `OPENROUTER_API_KEY` is unset or empty (no network call is made);
-  - the HTTP status is not 2xx;
-  - a network error occurs, or no response arrives within 15 s;
-  - the JSON is malformed;
-  - the output is off-schema.
+**Fallback.** The agent plans with the rule-based table instead when any of these happens:
+- no key is set (no request is sent);
+- the HTTP status is not 2xx;
+- the request fails or gets no response within 15 s;
+- the response is malformed JSON or fails the schema check.
 
-  The `quote` step records the fallback as `plannerTrace.fallback.reason`, for example
-  `[fallback from openrouter: missing_api_key: OPENROUTER_API_KEY is not set]`.
-- **Key handling.** The key is sent only in the `Authorization` header. It is never logged or written to the
-  trace or ledger. Error text is redacted (the key, any `sk-or-…` string, Bearer credentials) before it is
-  recorded. Tests use a mocked `fetch` only.
+If OpenAI fails, the agent falls back to the rule-based table, not to OpenRouter. A run makes at most one LLM
+request, to one provider.
+
+`plannerTrace` on the `quote` step records `provider` and `model`. On a fallback it also records
+`fallback.reason`. Examples:
+- `[fallback from openai: http_401: ...]`
+- `[fallback from llm: missing_api_key: neither OPENAI_API_KEY nor OPENROUTER_API_KEY is set]`
+
+**Key handling.**
+- The key is sent only in the `Authorization` header. It is never logged or written to the trace or the ledger.
+- Error text is redacted before it is recorded. That covers the key itself, any `sk-…` / `sk-proj-…` /
+  `sk-or-…` string, and Bearer and Authorization values.
+- Tests use a mocked `fetch` only.
 
 ## Scenarios
 
@@ -359,9 +378,9 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
   total. Running it again writes nothing. The agent polls refresh after a paid result with a pending receipt.
   Details: [apps/api/README.md](apps/api/README.md), [packages/core/README.md](packages/core/README.md).
 - **No secrets in the repo.** The default `mock` rail needs no credentials, and the default rule-based planner
-  makes no LLM or other paid API calls. PayPal, NEAR and OpenRouter credentials are read only from the
-  environment. `npm run secret-scan` greps tracked files for key-shaped strings, including `sk-or-` OpenRouter
-  keys.
+  makes no LLM or other paid API calls. PayPal, NEAR, OpenAI and OpenRouter credentials are read only from the
+  environment. `npm run secret-scan` searches tracked files for key-shaped strings, including OpenAI
+  (`sk-…`, `sk-proj-…`) and OpenRouter (`sk-or-…`) keys.
 - **Environment variables** (API; full table in [apps/api/README.md](apps/api/README.md)):
 
   | Var | Default | |
@@ -459,7 +478,7 @@ branch on 2026-11-01):
   - NEAR CLI commands in near-cli-rs 0.30 syntax;
   - `DEMO_PAYEES` docs;
   - the sandbox/testnet E2E status in the submission description;
-  - an optional OpenRouter LLM planner (`--planner llm`) with rule-based fallback, and `npm run secret-scan`.
+  - an optional LLM planner (`--planner llm`, OpenAI or OpenRouter) with rule-based fallback, and `npm run secret-scan`.
 
 ## License
 

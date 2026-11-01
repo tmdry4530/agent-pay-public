@@ -16,8 +16,9 @@ Options:
                            they differ
   --agent-id <id>          Agent id (default: demo-agent)
   --task <text>            Task description for the planner
-  --planner <rule|llm>     rule (default): deterministic price table. llm: OpenRouter (OPENROUTER_API_KEY,
-                           optional OPENROUTER_MODEL); falls back to rule on a missing key, error, timeout or
+  --planner <rule|llm>     rule (default): deterministic price table. llm: OpenAI if OPENAI_API_KEY is set
+                           (optional OPENAI_MODEL), else OpenRouter if OPENROUTER_API_KEY is set (optional
+                           OPENROUTER_MODEL); falls back to rule with no key, or on an error, timeout or
                            invalid output. The API's policy still decides either way
   --scenario <name>        Built-in demo task: small | over-limit | needs-approval
   --timeout-ms <n>         Approval wait and pending-receipt wait timeout (default: 120000)
