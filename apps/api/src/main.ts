@@ -21,6 +21,7 @@ try {
     adapter,
     policy: seed.policy,
     demo: { currency: seed.currency, amountScale: seed.amountScale, payees: seed.payees },
+    ...(config.receiptPoll ? { receiptPoll: config.receiptPoll } : {}),
   });
   server.on('error', (err) => failStart(err, config.rail));
   server.listen(config.port, config.host, () => {

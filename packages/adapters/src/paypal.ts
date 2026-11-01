@@ -50,6 +50,24 @@ export function mapPayoutStatus(batchStatus: string, itemStatus?: string): Recei
   }
 }
 
+/** Batch statuses PayPal reports while the batch is still being worked on (not final). */
+const BATCH_IN_FLIGHT: ReadonlySet<string> = new Set(['PENDING', 'PROCESSING']);
+
+/**
+ * Receipt status for a payout batch, as the adapter records it. Same as {@link mapPayoutStatus}, except that
+ * while the batch is still PENDING/PROCESSING the receipt stays `pending` even when the item already reports a
+ * final status (e.g. item SUCCESS inside a PROCESSING batch). Settling early would freeze `batchStatus:
+ * PROCESSING` in the ledger, because a settled receipt is never polled again; holding it pending lets the
+ * next refresh record the final batch status (SUCCESS/DENIED/CANCELED) together with the item status.
+ */
+export function payoutReceiptStatus(batchStatus: string, itemStatus?: string): ReceiptStatus {
+  const mapped = mapPayoutStatus(batchStatus, itemStatus);
+  if (mapped !== 'pending' && BATCH_IN_FLIGHT.has(batchStatus)) {
+    return 'pending';
+  }
+  return mapped;
+}
+
 interface PayoutBatchHeader {
   payout_batch_id?: string;
   batch_status?: string;
@@ -124,7 +142,7 @@ function receiptFromBatchBody(
     intentId,
     rail: 'paypal',
     externalId: payoutBatchId,
-    status: mapPayoutStatus(batchStatus, item?.transaction_status),
+    status: payoutReceiptStatus(batchStatus, item?.transaction_status),
     at,
     meta: metaFromPayout(batchStatus, item, extraMeta),
   };
@@ -481,7 +499,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
         intentId: receipt.intentId,
         rail: 'paypal',
         externalId: receipt.externalId,
-        status: mapPayoutStatus(batchStatus, item?.transaction_status),
+        status: payoutReceiptStatus(batchStatus, item?.transaction_status),
         at,
         meta: metaFromPayout(batchStatus, item),
       };

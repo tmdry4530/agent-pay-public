@@ -12,6 +12,7 @@ export {
   createPayPalAdapter,
   isValidEmail,
   mapPayoutStatus,
+  payoutReceiptStatus,
   payPalConfigFromEnv,
   formatAmount,
   requestId,
