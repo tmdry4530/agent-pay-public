@@ -17,7 +17,7 @@ By decision it is not a server rail, so `RAIL=paypal-orders` makes the API exit 
 | Create the sandbox REST app, copy credentials, export the NEAR key | Owner |
 | Fund the NEAR testnet account from the faucet | Owner |
 | Put the values in a local `.env` file on the machine that runs the commands | Owner |
-| Decide whether and when to make the GitHub repository public | Owner |
+| Make the GitHub repository public (done: https://github.com/tmdry4530/agent-pay-public) | Owner |
 | Run the integration tests and rail demos ([Commands we run afterwards](#commands-we-run-afterwards)) | Team |
 
 **Rules for secrets**
@@ -202,10 +202,10 @@ Rail seeds (from `apps/api/src/seed.ts`):
 The `small` scenario quotes 10 USD: that is a 10 USD payout on `paypal` and a 0.1 NEAR transfer on `near`. Both
 are auto-approved.
 
-## 3. Making the repository public (separate, future decision)
+## 3. Making the repository public (done)
 
-The GitHub repository is currently a **private** backup. Whether to make it public, and when, is the owner's
-decision. Treat it as its own step, after the work above. Before flipping visibility:
+Done: the code is public at https://github.com/tmdry4530/agent-pay-public. The checklist below is kept for
+reference, for any future repository that goes from private to public:
 
 - [ ] **Check the full history for secrets**, not just the current tree. Every branch and every commit becomes
       visible once the repository is public. Search for anything that looks like a client secret, private key or

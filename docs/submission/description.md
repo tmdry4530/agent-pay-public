@@ -1,5 +1,13 @@
 # agent-pay: project description
 
+## Links
+
+- Live demo (mock rail only, no real funds): https://agent-pay.chamdom.dev
+- Demo video: https://youtu.be/i1j1135RLzk
+- Source code: https://github.com/tmdry4530/agent-pay-public
+- Devpost (PayPal AI Hackathon): https://devpost.com/software/agent-pay-il6n27
+- NEAR HACKATHON demo post on X: https://x.com/chamdom/status/2116891550634639375
+
 ## One-paragraph summary
 
 agent-pay is a policy-guarded payment layer for AI agents. Instead of handing an agent a payment API key, the

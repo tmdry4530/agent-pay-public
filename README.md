@@ -3,6 +3,11 @@
 Policy-guarded payments for AI agents: an agent asks to pay, a policy engine decides, a ledger records every
 step, and a payment rail adapter moves the money only when the decision allows it.
 
+- **Live demo (mock rail only, no real funds):** https://agent-pay.chamdom.dev
+- **Demo video:** https://youtu.be/i1j1135RLzk
+- **Devpost (PayPal AI Hackathon):** https://devpost.com/software/agent-pay-il6n27
+- **NEAR HACKATHON demo post on X:** https://x.com/chamdom/status/2116891550634639375
+
 ## Problem
 
 An AI agent that can spend money needs more than an API key for a payment provider. Without guard rails it can:
@@ -120,12 +125,11 @@ non-zero exit.
 ## Reproduce from a fresh clone
 
 Requirements: Node 24 (`node --version` ≥ 24), npm, and Corepack for the web UI's pinned pnpm
-(`corepack enable`, or set `COREPACK_HOME` to a writable directory). The repository is private, so cloning needs
-access to it.
+(`corepack enable`, or set `COREPACK_HOME` to a writable directory). The repository is public.
 
 ```sh
-git clone https://github.com/tmdry4530/agent-pay.git
-cd agent-pay
+git clone https://github.com/tmdry4530/agent-pay-public.git
+cd agent-pay-public
 npm install            # core, adapters, api, agent (no third-party runtime deps)
 npm run web:install    # apps/web via pnpm (needed by the root test/typecheck scripts and npm run demo)
 npm run typecheck
@@ -429,12 +433,14 @@ Scope: testnet only. Mainnet code paths exist but have not been run; see
 This project is submitted to **two** hackathons: the **PayPal AI Hackathon** and the **NEAR HACKATHON**. It is the
 same codebase in both: the PayPal Payouts sandbox rail and the NEAR testnet rail sit side by side behind one
 policy engine and ledger, and this README describes both. Submission text and the demo video
-script: [docs/submission/](docs/submission/).
+script: [docs/submission/](docs/submission/). Demo video: https://youtu.be/i1j1135RLzk. PayPal AI Hackathon
+entry: [Devpost](https://devpost.com/software/agent-pay-il6n27). NEAR HACKATHON demo post:
+[X](https://x.com/chamdom/status/2116891550634639375).
 
 ## Changes since 2026-10-01
 
-A summary of `git log --since=2026-10-01` (about 200 commits, built 2026-10-28 to 2026-10-30, plus this
-branch on 2026-11-01):
+A summary of `git log --since=2026-10-01` (about 200 commits, built 2026-10-28 to 2026-10-30, plus the
+2026-11-01 changes merged in PRs #7 and #8):
 
 - **Core** (`packages/core`):
   - policy engine, JSON ledger and payment orchestrator;
@@ -470,7 +476,7 @@ branch on 2026-11-01):
 - **Demo and docs**:
   - `npm run demo`, Playwright recordings and a 170 s submission video with voiceover;
   - the live-readiness checklist, the submission description and per-package READMEs.
-- **This branch** (2026-11-01):
+- **2026-11-01** (PRs #7 and #8):
   - MIT license;
   - a PayPal receipt now stays `pending` until the payout batch is final, and the API polls pending receipts;
   - PayPal failure details (status, name, message, debug_id, details) are recorded in the receipt, redacted;
