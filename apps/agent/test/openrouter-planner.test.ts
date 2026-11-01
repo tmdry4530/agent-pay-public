@@ -59,7 +59,7 @@ test('success: valid JSON proposal becomes the quote; request is a plain Chat Co
   assert.equal(quote.amount, 10);
   assert.equal(quote.currency, 'USD');
   assert.equal(quote.purpose, `1M GPT tokens (openrouter ${DEFAULT_OPENROUTER_MODEL})`);
-  assert.deepEqual(quote.trace, { planner: 'openrouter', model: DEFAULT_OPENROUTER_MODEL });
+  assert.deepEqual(quote.trace, { planner: 'openrouter', provider: 'openrouter', model: DEFAULT_OPENROUTER_MODEL });
   assertNoKey(quote);
 
   assert.equal(calls.length, 1);
@@ -91,8 +91,8 @@ test('missing key: no network call, rule-based quote with the fallback recorded'
   const { fetch, calls } = mockFetch(() => {
     throw new Error('must not be called');
   });
-  for (const env of [{}, { OPENROUTER_API_KEY: '' }, { OPENROUTER_API_KEY: '   ' }]) {
-    const quote = await createPlanner('llm', { env, fetch }).plan('buy 1M tokens of GPT inference', CTX);
+  for (const apiKey of [undefined, '', '   ']) {
+    const quote = await new OpenRouterPlanner({ apiKey, fetch }).plan('buy 1M tokens of GPT inference', CTX);
     assert.equal(quote.amount, 10);
     assert.equal(quote.payee, 'openai-api');
     assert.equal(quote.trace?.planner, 'rule-based');
@@ -252,12 +252,12 @@ test('CLI --planner llm without OPENROUTER_API_KEY falls back to rules (no netwo
     await rm(dir, { recursive: true, force: true });
   });
   const api = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
-  const env = { ...process.env, OPENROUTER_API_KEY: '' };
+  const env = { ...process.env, OPENAI_API_KEY: '', OPENROUTER_API_KEY: '' };
   const ok = await runCli(['--api', api, '--planner', 'llm', '--scenario', 'small', '--json'], env);
   assert.equal(ok.code, 0, ok.stderr);
   const quote = ok.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>).find((e) => e.step === 'quote')!;
   assert.equal(quote.planner, 'rule-based');
-  assert.deepEqual((quote.plannerTrace as { fallback: unknown }).fallback, { from: 'openrouter', reason: 'missing_api_key: OPENROUTER_API_KEY is not set' });
+  assert.deepEqual((quote.plannerTrace as { fallback: unknown }).fallback, { from: 'llm', reason: 'missing_api_key: neither OPENAI_API_KEY nor OPENROUTER_API_KEY is set' });
 
   const bad = await runCli(['--api', api, '--planner', 'gpt', '--scenario', 'small'], env);
   assert.equal(bad.code, 1);

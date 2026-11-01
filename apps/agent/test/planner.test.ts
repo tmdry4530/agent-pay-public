@@ -71,8 +71,10 @@ test('built-in scenarios plan to 10 / 150 / 75 USD to openai-api', async () => {
   assert.deepEqual(amounts, { small: 10, 'over-limit': 150, 'needs-approval': 75 });
 });
 
-test('createPlanner: rule is RuleBasedPlanner, llm is the OpenRouter planner, anything else throws', () => {
+test('createPlanner: rule is RuleBasedPlanner, llm picks a provider by key, anything else throws', () => {
   assert.ok(createPlanner('rule') instanceof RuleBasedPlanner);
-  assert.equal(createPlanner('llm', { env: {} }).name, 'openrouter');
+  assert.equal(createPlanner('llm', { env: {} }).name, 'llm');
+  assert.equal(createPlanner('llm', { env: { OPENROUTER_API_KEY: 'x' } }).name, 'openrouter');
+  assert.equal(createPlanner('llm', { env: { OPENAI_API_KEY: 'x', OPENROUTER_API_KEY: 'y' } }).name, 'openai');
   assert.throws(() => createPlanner('other' as 'rule'), /unknown_planner/);
 });

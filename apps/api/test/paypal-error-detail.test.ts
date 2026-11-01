@@ -52,7 +52,7 @@ test('declined PayPal payout: API answer and ledger carry the redacted PayPal er
   });
   const body = (await res.json()) as { status: string; error: string; receipt: { meta: Record<string, string> } };
   assert.equal(body.status, 'failed');
-  assert.match(body.error, /^payment_declined: paypal declined  \(paypal payout failed: HTTP 422: RECEIVER_UNREGISTERED: /);
+  assert.match(body.error, /^payment_declined: paypal declined \(paypal payout failed: HTTP 422: RECEIVER_UNREGISTERED: /);
   assert.match(body.error, /debug_id dbg77ledger/);
   assert.equal(body.receipt.meta.errorStatus, '422');
 
