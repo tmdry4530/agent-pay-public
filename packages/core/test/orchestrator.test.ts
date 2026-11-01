@@ -7,6 +7,7 @@ import {
   Ledger,
   PaymentError,
   approve,
+  declinedMessage,
   reject,
   runPayment,
   type PaymentAdapter,
@@ -180,7 +181,7 @@ test('declined receipt -> failed, receipt kept, not counted', async (t) => {
   const adapter = new MockAdapter((i) => ({ intentId: i.id, rail: 'mock', externalId: 'd-1', status: 'failed', at: NOW }));
   const result = await runPayment(intent({ amount: 30 }), policy, ledger, adapter);
   assert.equal(result.status, 'failed');
-  assert.match(result.error ?? '', /^payment_declined: /);
+  assert.equal(result.error, 'payment_declined: mock declined d-1');
   assert.equal(result.receipt?.status, 'failed');
   assert.equal((await ledger.get('pi-1'))?.receipt?.externalId, 'd-1');
   assert.equal(await ledger.dailyTotal('agent-1'), 0);
@@ -246,4 +247,30 @@ test('persistence: a new Ledger on the same file sees the final state', async (t
   const replay = await runPayment(intent({ id: 'n', amount: 70 }), policy, third, adapter);
   assert.equal(replay.status, 'paid');
   assert.equal(replay.replayed, true);
+});
+
+test('declined message omits an empty external id or detail (no double space, no empty parentheses)', async (t) => {
+  const { ledger } = await setup(t);
+  const cases: Array<[string, unknown, string]> = [
+    ['', 'paypal payout failed: HTTP 422', 'payment_declined: mock declined (paypal payout failed: HTTP 422)'],
+    ['  ', undefined, 'payment_declined: mock declined'],
+    ['d-2', '', 'payment_declined: mock declined d-2'],
+    ['d-3', '   ', 'payment_declined: mock declined d-3'],
+    ['d-4', 'insufficient funds', 'payment_declined: mock declined d-4 (insufficient funds)'],
+  ];
+  for (const [i, [externalId, error, expected]] of cases.entries()) {
+    const adapter = new MockAdapter((it) => ({
+      intentId: it.id,
+      rail: 'mock',
+      externalId,
+      status: 'failed',
+      at: NOW,
+      ...(error === undefined ? {} : { meta: { error } }),
+    }));
+    const result = await runPayment(intent({ id: `dm-${i}`, amount: 1 }), policy, ledger, adapter);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.error, expected);
+    assert.doesNotMatch(result.error ?? '', /  |\(\s*\)/);
+  }
+  assert.equal(declinedMessage('near', 'tx1', 42), 'payment_declined: near declined tx1');
 });

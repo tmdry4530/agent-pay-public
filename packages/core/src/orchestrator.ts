@@ -331,10 +331,20 @@ async function payApproved(
   if (failed) {
     // Adapters may explain the decline in receipt meta (`meta.error`, already redacted by the adapter).
     const detail = (receipt as { meta?: { error?: unknown } }).meta?.error;
-    const why = typeof detail === 'string' && detail !== '' ? ` (${detail})` : '';
-    return { ...base, status: 'failed', receipt, error: `${FailureCode.PaymentDeclined}: ${adapter.rail} declined ${receipt.externalId}${why}` };
+    return { ...base, status: 'failed', receipt, error: declinedMessage(adapter.rail, receipt.externalId, detail) };
   }
   return { ...base, status: 'paid', receipt };
+}
+
+/**
+ * `payment_declined: <rail> declined <externalId> (<detail>)`, leaving out an empty or whitespace-only
+ * external id or detail, so the message never has a double space or empty parentheses.
+ */
+export function declinedMessage(rail: string, externalId: unknown, detail: unknown): string {
+  const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const head = [`${text(rail) || 'rail'} declined`, text(externalId)].filter((p) => p !== '').join(' ');
+  const why = text(detail);
+  return `${FailureCode.PaymentDeclined}: ${head}${why ? ` (${why})` : ''}`;
 }
 
 const PAY_STATUSES: ReadonlySet<string> = new Set(['succeeded', 'pending', 'failed']);
