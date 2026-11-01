@@ -437,6 +437,10 @@ script: [docs/submission/](docs/submission/). Demo video: https://youtu.be/i1j11
 entry: [Devpost](https://devpost.com/software/agent-pay-il6n27). NEAR HACKATHON demo post:
 [X](https://x.com/chamdom/status/2116891550634639375).
 
+The same author also submitted a separate, independent NEAR HACKATHON project,
+[TEE Receipts](https://github.com/tmdry4530/tee-receipts) (tracks: privacy + open). It shares no code with
+agent-pay and solves a different problem.
+
 ## Changes since 2026-10-01
 
 A summary of `git log --since=2026-10-01` (about 200 commits, built 2026-10-28 to 2026-10-30, plus the
