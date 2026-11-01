@@ -117,6 +117,124 @@ Add `--json` for NDJSON output (`npm run agent -- --scenario small --json`). npm
 stdout first, so when piping NDJSON use `npm run -s agent -- ...`, which also hides npm's error footer on a
 non-zero exit.
 
+## Reproduce from a fresh clone
+
+Requirements: Node 24 (`node --version` ≥ 24), npm, and Corepack for the web UI's pinned pnpm
+(`corepack enable`, or set `COREPACK_HOME` to a writable directory). The repository is private, so cloning needs
+access to it.
+
+```sh
+git clone https://github.com/tmdry4530/agent-pay.git
+cd agent-pay
+npm install            # core, adapters, api, agent (no third-party runtime deps)
+npm run web:install    # apps/web via pnpm (needed by the root test/typecheck scripts and npm run demo)
+npm run typecheck
+npm test               # mocks only: no network, no credentials. The live integration tests skip themselves.
+```
+
+All three rails use the same commands; only `RAIL` and the rail's env vars change. Keep values in a root `.env`
+(`cp .env.example .env`; `.env` is gitignored). The placeholders below are **not** real values: never commit a
+filled-in `.env`, and never paste a key into an issue or chat.
+
+### Mock rail (default, no credentials)
+
+```sh
+LEDGER_PATH=/tmp/agent-pay-mock/ledger.json npm run api                # terminal 1
+npm run agent -- --scenario small                                       # terminal 2, exit 0
+npm run agent -- --scenario over-limit                                  # exit 2
+npm run agent -- --scenario needs-approval --auto-approve-as alice      # exit 0
+```
+
+Or `npm run demo` for the API plus the web UI on a fresh temp ledger. The expected output is in
+[Scenarios](#scenarios).
+
+### PayPal Payouts sandbox (`RAIL=paypal`)
+
+You need a PayPal developer **sandbox** REST app (client id and secret) and a sandbox **personal** account to
+receive payouts. Step by step: [docs/live-readiness.md §1](docs/live-readiness.md#1-paypal-sandbox-railpaypal).
+
+```sh
+# .env (placeholders)
+RAIL=paypal
+PAYPAL_CLIENT_ID=<sandbox-app-client-id>
+PAYPAL_CLIENT_SECRET=<sandbox-app-client-secret>
+# PAYPAL_BASE_URL empty = https://api-m.sandbox.paypal.com; do not point it at the live API
+DEMO_PAYEES=openai-api=<sandbox-personal-email>
+# optional: make the 10 USD small scenario stop for approval on stage
+# DEMO_APPROVAL_ABOVE=5
+```
+
+```sh
+LEDGER_PATH=/tmp/agent-pay-paypal/ledger.json npm run api   # terminal 1: "... (rail=paypal, ...)"
+npm run agent -- --rail paypal --scenario small             # terminal 2
+```
+
+A payout batch can stay `PENDING`/`PROCESSING` for a while after the item succeeds. The receipt stays `pending`
+until the batch is final. The API's background poller (`RECEIPT_POLL_MS`, default 5 s, for up to
+`RECEIPT_POLL_TIMEOUT_MS`, default 10 min) and `POST /intents/:id/refresh` settle it. If the agent's receipt wait
+ends first, it exits 3 (`receipt_pending`); `GET /ledger` shows the final state later. When PayPal returns an
+error, the receipt's `meta` records `errorStatus`, `errorName`, `errorMessage`, `errorDebugId` and `errorDetails`.
+Token-like strings are redacted, and request headers are never recorded.
+
+Live integration test (one 0.01 USD sandbox payout): set `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and
+`PAYPAL_PAYOUT_RECEIVER=<sandbox-personal-email>`, then `npm test -w @agent-pay/adapters`.
+
+### NEAR testnet (`RAIL=near`)
+
+You need a funded sender `.testnet` account with its private key, plus a receiver account. near-cli-rs 0.30
+commands: [docs/live-readiness.md §2](docs/live-readiness.md#2-near-testnet-railnear).
+
+```sh
+# .env (placeholders)
+RAIL=near
+NEAR_ACCOUNT_ID=<sender>.testnet
+NEAR_PRIVATE_KEY=<ed25519:... private key of the sender>
+# NEAR_NETWORK empty = testnet; NEAR_RPC_URL empty = https://test.rpc.fastnear.com
+DEMO_PAYEES=openai-api=<receiver>.testnet
+```
+
+```sh
+LEDGER_PATH=/tmp/agent-pay-near/ledger.json npm run api   # terminal 1: "... (rail=near, ...)"
+npm run agent -- --rail near --scenario small             # terminal 2: sends 0.1 NEAR
+```
+
+Set `DEMO_PAYEES`: the default NEAR payee `demo-merchant.testnet` may not exist on testnet, and a transfer to a
+missing account fails. Live integration test (one 0.001 NEAR transfer): set `NEAR_ACCOUNT_ID`,
+`NEAR_PRIVATE_KEY` and `NEAR_RECEIVER_ID=<receiver>.testnet`, then `npm test -w @agent-pay/adapters`.
+
+### Demo payee map (`DEMO_PAYEES`)
+
+The agent's planner only knows logical payee names: `openai-api`, `anthropic-api`, `vercel` and `near-compute`.
+The API maps them to rail addresses and serves the map on `GET /rail`. `DEMO_PAYEES` is a comma-separated list
+of `name=address` pairs. When set, it **replaces** the whole default map, and the policy allowlist becomes those
+addresses. The built-in scenarios pay `openai-api`.
+
+```sh
+DEMO_PAYEES=openai-api=<receiver>.testnet,anthropic-api=<receiver>.testnet,vercel=<receiver>.testnet,near-compute=<receiver>.testnet
+```
+
+`apps/api/src/main.ts` passes the environment to `railSeed()` in
+[`apps/api/src/seed.ts`](apps/api/src/seed.ts), which parses the value with `parseDemoPayees()`. The API exits 1
+at startup with a `demo_payees:` error in any of these cases:
+
+- an item is not `name=address`;
+- a name is repeated;
+- on `RAIL=paypal`, an address is not an email;
+- on `RAIL=near`, an address fails `isAcceptedPayee()` for `NEAR_NETWORK`. On testnet that means it is not
+  `*.testnet` or a 64-char hex implicit account.
+
+The NEAR check is format-only; it does not ask the network whether the account exists. `RAIL=mock` ignores
+`DEMO_PAYEES`. More detail: [docs/live-readiness.md](docs/live-readiness.md#demo-payee-map-demo_payees).
+
+### Demo approval threshold (`DEMO_APPROVAL_ABOVE`)
+
+The seed policies require human approval above 50 USD (`mock`, `paypal`) or 0.5 NEAR (`near`). Those defaults
+stay unchanged unless you set `DEMO_APPROVAL_ABOVE=<number>` in the rail's currency. It must be ≥ 0 and below
+the rail's per-transaction max (100 USD / 1 NEAR). Otherwise the API exits 1 with
+`invalid_demo_approval_above`. For example, `DEMO_APPROVAL_ABOVE=5` makes the 10 USD `small` scenario return
+`needs_approval`, so a live demo can show human approval while spending very little. `npm run demo` passes it
+through from the shell (`DEMO_APPROVAL_ABOVE=5 npm run demo`).
+
 ## Scenarios
 
 On the `mock` rail the API starts with this policy for `demo-agent`: per-transaction max 100 USD, daily max 200 USD, approval
@@ -217,7 +335,9 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
   | `RAIL` | `mock` | `mock`, `paypal` (Payouts v1 sandbox) or `near` (NEAR testnet native transfer) |
   | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL` | | Only for `RAIL=paypal` (sandbox) |
   | `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK`, `NEAR_RPC_URL` | | Only for `RAIL=near` (`NEAR_NETWORK` defaults to `testnet`, `NEAR_RPC_URL` to `https://test.rpc.fastnear.com`) |
-  | `DEMO_PAYEES` | | Optional for `paypal` / `near`: `name=address,...` replaces the default payee map |
+  | `DEMO_PAYEES` | | Optional for `paypal` / `near`: `name=address,...` replaces the default payee map ([details](#demo-payee-map-demo_payees)) |
+  | `DEMO_APPROVAL_ABOVE` | | Optional: lowers the approval threshold for a live demo ([details](#demo-approval-threshold-demo_approval_above)) |
+  | `RECEIPT_POLL_MS`, `RECEIPT_POLL_TIMEOUT_MS` | `5000`, `600000` | Background refresh of `pending` receipts after a paid result; `RECEIPT_POLL_MS=0` turns it off |
 
   All names are in [.env.example](.env.example). With `RAIL=paypal` or `RAIL=near` and a required var unset, the API exits 1 and
   lists the missing names (never values), e.g.
@@ -225,3 +345,84 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
 
   The API answers CORS only for `localhost` / `127.0.0.1` origins. The policy is kept in memory and resets to the
   seed policy when the API restarts (`PUT /policy` changes it until then).
+
+## NEAR's role in agent-pay
+
+NEAR is one of the two real payment rails, next to PayPal. agent-pay is a rail-agnostic control layer: the agent,
+the policy engine and the ledger don't change when the money moves on NEAR instead of PayPal. On `RAIL=near`:
+
+- **Seed policy in NEAR.** The policy currency is `NEAR`: per-transaction max 1, daily max 2, approval above
+  0.5. `GET /rail` publishes `amountScale` 0.01, so the planner's 10 USD quote becomes a 0.1 NEAR intent.
+- **Payee allowlist of NEAR account ids.** Logical payees map to `.testnet` accounts (or implicit accounts) through
+  `DEMO_PAYEES`. The adapter refuses a payee that is not valid for the configured network.
+- **Native transfer, signed locally.** [`packages/adapters/src/near.ts`](packages/adapters/src/near.ts) builds
+  one native NEAR `Transfer`, signs it with the sender's ed25519 key, and submits it with `send_tx`
+  (`wait_until: FINAL`). It uses a zero-dependency JSON-RPC client
+  ([`near-rpc.ts`](packages/adapters/src/near-rpc.ts)) against the FASTNEAR public testnet RPC by default.
+- **Only final transactions settle.** A receipt becomes `succeeded` or `failed` only when the RPC reports
+  `final_execution_status: FINAL`. Any other outcome stays `pending`, and the API's refresh calls `tx` to check
+  again. If the outcome is unknown (for example, no transaction hash), the receipt is held `pending` with
+  `needsManualResolve`. The amount stays reserved against the daily limit until an operator resolves it. NEAR
+  transfers are final, so there is no refund path.
+
+Scope: testnet only. Mainnet code paths exist but have not been run; see
+[docs/live-readiness.md](docs/live-readiness.md) for the risks.
+
+## Hackathon submissions (disclosure)
+
+This project is submitted to **two** hackathons: the **PayPal AI Hackathon** and the **NEAR HACKATHON**. It is the
+same codebase in both: the PayPal Payouts sandbox rail and the NEAR testnet rail sit side by side behind one
+policy engine and ledger, and this README describes both. Submission text and the demo video
+script: [docs/submission/](docs/submission/).
+
+## Changes since 2026-10-01
+
+A summary of `git log --since=2026-10-01` (about 200 commits, built 2026-10-28 to 2026-10-30, plus this
+branch on 2026-11-01):
+
+- **Core** (`packages/core`):
+  - policy engine, JSON ledger and payment orchestrator;
+  - decision history with actors on each ledger entry;
+  - reconciliation and refresh of pending receipts;
+  - operator manual resolve (`resolvedBy` required).
+  - A hardening pass (F1–F16):
+    - atomic evaluate-and-record, so concurrent intents can't exceed the daily max;
+    - ledger validation on read, fsync and a cross-process lock file;
+    - per-currency daily totals in integer minor units, on the server clock;
+    - a `submitting` status before the rail call, with default timeouts around rail calls;
+    - unknown outcomes held `pending` with `needsManualResolve`.
+- **Adapters** (`packages/adapters`):
+  - `mock`;
+  - PayPal Payouts v1 sandbox (`paypal`);
+  - PayPal Orders v2 (`paypal-orders`, adapter-side only);
+  - a NEAR testnet native-transfer adapter with a zero-dependency RPC client and FINAL-only settlement;
+  - error fixtures taken from the PayPal and NEAR docs.
+- **API** (`apps/api`):
+  - `node:http` routes for intents, approve/reject/refresh/resolve, ledger, policy, `/rail` and `/health`;
+  - per-rail seeds and `DEMO_PAYEES`;
+  - startup errors that list missing env names only;
+  - hardening: the CSRF origin guard (`403 forbidden_origin`), `Idempotency-Key`, a PayPal timeout, the
+    `{error, message}` contract, `415`, and `409` race codes.
+- **Agent CLI** (`apps/agent`):
+  - a rule-based planner and three scenarios;
+  - approval and receipt polling;
+  - `--json` NDJSON output and exit codes.
+- **Web** (`apps/web`):
+  - a Vite + React demo wired to the real API (or an in-memory core);
+  - decision history, Refresh and Resolve flows, `409` and stuck-submitting banners;
+  - a redesign and an accessibility pass.
+- **Demo and docs**:
+  - `npm run demo`, Playwright recordings and a 170 s submission video with voiceover;
+  - the live-readiness checklist, the submission description and per-package READMEs.
+- **This branch** (2026-11-01):
+  - MIT license;
+  - a PayPal receipt now stays `pending` until the payout batch is final, and the API polls pending receipts;
+  - PayPal failure details (status, name, message, debug_id, details) are recorded in the receipt, redacted;
+  - `DEMO_APPROVAL_ABOVE`;
+  - NEAR CLI commands in near-cli-rs 0.30 syntax;
+  - `DEMO_PAYEES` docs;
+  - the sandbox/testnet E2E status in the submission description.
+
+## License
+
+[MIT](LICENSE) © 2026 tmdry4530
