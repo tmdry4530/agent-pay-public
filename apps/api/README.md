@@ -14,6 +14,9 @@
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_BASE_URL?`, `PAYPAL_TIMEOUT_MS?` | | only for `RAIL=paypal` (sandbox, from your shell env; never commit). `PAYPAL_TIMEOUT_MS` — positive integer HTTP timeout in ms (default `30000`) |
 | `NEAR_ACCOUNT_ID`, `NEAR_PRIVATE_KEY`, `NEAR_NETWORK?`, `NEAR_RPC_URL?` | | only for `RAIL=near`; `NEAR_RPC_URL` defaults to `https://test.rpc.fastnear.com` on testnet |
 | `DEMO_PAYEES` | | optional for `RAIL=paypal` or `near` only: comma-separated `name=address` pairs (whitespace trimmed). When non-empty, **replaces** the default logical→address map entirely. Invalid syntax or payee for the rail → startup error `demo_payees: … (RAIL=…)`. Ignored for `mock`. |
+| `DEMO_APPROVAL_ABOVE` | | optional live-demo knob for every rail: replaces the seed policy's `requireApprovalAbove` (rail currency; seed default 50 USD, 0.5 NEAR). Must be a number `>= 0` and below the rail's `perTxMax`, else startup error `invalid_demo_approval_above`. E.g. `5` makes the 10 USD `small` scenario stop at `needs_approval`. |
+| `RECEIPT_POLL_MS` | `5000` | interval of the background poller that refreshes `pending` receipts after a paid result (for example a PayPal batch still `PROCESSING`). `0` turns it off; `POST /intents/:id/refresh` still works. |
+| `RECEIPT_POLL_TIMEOUT_MS` | `600000` | how long the poller keeps refreshing one intent before giving up (the receipt stays `pending`). |
 
 All names are listed in the root [.env.example](../../.env.example); `npm run api` (root script:
 `node --env-file-if-exists=.env apps/api/src/main.ts`) loads a filled-in copy when one exists. Startup errors are formatted by `src/startup-error.ts`: an error carrying a `missing` /

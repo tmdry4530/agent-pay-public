@@ -167,6 +167,31 @@ The built-in scenarios pay `openai-api`, so include at least that name:
 `paypal`, a wrong-network or invalid account on `near`) make the API exit 1 at startup with a `demo_payees:`
 error.
 
+Format: comma-separated `name=address` pairs; whitespace around each item, name and address is trimmed. The
+logical names the demo uses are `openai-api`, `anthropic-api`, `vercel` and `near-compute`. Examples with
+placeholder addresses (replace them with accounts you own):
+
+```sh
+# RAIL=near: <receiver>.testnet is your second testnet account (a 64-char hex implicit account also works)
+DEMO_PAYEES=openai-api=<receiver>.testnet,anthropic-api=<receiver>.testnet,vercel=<receiver>.testnet,near-compute=<receiver>.testnet
+# RAIL=paypal: the personal sandbox account's email
+DEMO_PAYEES=openai-api=<sandbox-personal-email>,anthropic-api=<sandbox-personal-email>
+```
+
+Where it is read: `apps/api/src/main.ts` calls `railSeed(config.rail, process.env)` in `apps/api/src/seed.ts`,
+which parses the value with `parseDemoPayees` and builds the policy allowlist from the addresses. Checks at
+startup:
+
+- each item must be `name=address` with both parts non-empty; a repeated name is rejected
+  (`demo_payees: duplicate logical payee name "…"`);
+- `RAIL=paypal`: each address must pass a simple email check (one `@`, a dot in the domain, no spaces);
+- `RAIL=near`: each address must pass `isAcceptedPayee` (`packages/adapters/src/near-account.ts`) for
+  `NEAR_NETWORK`: a valid account id ending in `.testnet` on testnet (`.near` on mainnet), or a 64-char hex
+  implicit account. This is a format check only; it does **not** ask the network whether the account exists, so
+  confirm the receiver with `near account view-account-summary <receiver>.testnet network-config testnet now`
+  before the demo.
+- `RAIL=mock` ignores `DEMO_PAYEES`.
+
 Rail seeds (from `apps/api/src/seed.ts`):
 
 | Rail | Currency | Amount scale | Per-tx max | Daily max | Approval above |
