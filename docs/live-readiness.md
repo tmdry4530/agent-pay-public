@@ -92,8 +92,18 @@ Owner checklist:
       list two ways:
       - a wallet from the curated list at [wallet.near.org](https://wallet.near.org/). Some wallets create named
         testnet accounts directly; write down the seed phrase.
-      - the NEAR CLI: `near create-account <name>.testnet --useFaucet` creates the account and funds it from
-        the testnet faucet.
+      - the NEAR CLI ([near-cli-rs](https://github.com/near/near-cli-rs) 0.30.x; checked against 0.30.1). This
+        creates the account, has the testnet faucet service pay for it, generates a new key pair and saves it to
+        the CLI keychain:
+
+        ```sh
+        near account create-account sponsor-by-faucet-service <name>.testnet \
+          autogenerate-new-keypair save-to-keychain network-config testnet create
+        ```
+
+        Source: [near-cli-rs v0.30.1 guide, `create-account` → `sponsor-by-faucet-service`](https://github.com/near/near-cli-rs/blob/v0.30.1/docs/GUIDE.en.md#sponsor-by-faucet-service---I-would-like-the-faucet-service-sponsor-to-cover-the-cost-of-creating-an-account-testnet-only-for-now).
+        The subcommand chain was also checked against `near account create-account … --help` on near-cli-rs 0.30.1.
+        The old JS CLI form `near create-account <name>.testnet --useFaucet` does not exist in near-cli-rs.
 
       Docs: [Create an Account](https://docs.near.org/getting-started/create-account),
       [Creating Implicit & Named Accounts](https://docs.near.org/protocol/tutorials/creating-implicit-and-named-accounts).
@@ -103,8 +113,15 @@ Owner checklist:
       The demo sends 0.1 NEAR per `small` run and the integration test sends 0.001 NEAR, plus gas. Whether one
       faucet request covers several runs *needs confirmation*: the docs say only that it sends "a small amount",
       and they note that the external Testnet Faucet "might be out of tokens at times".
-- [ ] **Get the account's private key.** If the account was made with the CLI, NEAR's docs give
-      `near account export-account <name>.testnet` to export the seed phrase or private key. With a wallet, use
+- [ ] **Get the account's private key.** If the account was made with the CLI, export it with near-cli-rs 0.30.x
+      (it prints `ed25519:…`; paste it straight into the local `.env`, never into a file in the repo or a chat):
+
+      ```sh
+      near account export-account <name>.testnet using-private-key network-config testnet
+      ```
+
+      Source: [near-cli-rs v0.30.1 guide, `export-account` → `using-private-key`](https://github.com/near/near-cli-rs/blob/v0.30.1/docs/GUIDE.en.md#using-private-key---export-existing-account-using-a-private-key).
+      Use `using-seed-phrase` instead of `using-private-key` for the seed phrase. With a wallet, use
       the wallet's backup/export flow. How each wallet exports a raw private key (as opposed to a seed phrase)
       differs by wallet and *needs confirmation* for the wallet you choose. The CLI route is the documented one.
 - [ ] **Create or pick a receiver account**: a second testnet account that receives the transfers, either
