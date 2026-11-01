@@ -329,7 +329,10 @@ async function payApproved(
   const failed = receipt.status === 'failed';
   await settle(failed ? 'failed' : 'paid', receipt);
   if (failed) {
-    return { ...base, status: 'failed', receipt, error: `${FailureCode.PaymentDeclined}: ${adapter.rail} declined ${receipt.externalId}` };
+    // Adapters may explain the decline in receipt meta (`meta.error`, already redacted by the adapter).
+    const detail = (receipt as { meta?: { error?: unknown } }).meta?.error;
+    const why = typeof detail === 'string' && detail !== '' ? ` (${detail})` : '';
+    return { ...base, status: 'failed', receipt, error: `${FailureCode.PaymentDeclined}: ${adapter.rail} declined ${receipt.externalId}${why}` };
   }
   return { ...base, status: 'paid', receipt };
 }

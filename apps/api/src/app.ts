@@ -21,6 +21,7 @@ import {
 import { ValidationError, parseDecisionBody, parseIdempotencyKey, parseIntentBody, parsePolicy } from './validate.ts';
 import { resolveRoute } from './resolve-route.ts';
 import { DEFAULT_POLICY } from './policy-defaults.ts';
+import { createReceiptPoller, type ReceiptPoller } from './receipt-poller.ts';
 
 export { DEFAULT_POLICY } from './policy-defaults.ts';
 
@@ -45,6 +46,11 @@ export interface AppOptions {
   now?: () => Date;
   /** Generator for intent ids when the client omits one. */
   newId?: () => string;
+  /**
+   * Server-side follow-up for pending receipts: after a payment answers `paid` with a `pending` receipt, the
+   * API re-checks the rail every `intervalMs` until it settles or `timeoutMs` passes. Off when omitted.
+   */
+  receiptPoll?: { intervalMs: number; timeoutMs: number };
 }
 
 class HttpError extends Error {
@@ -101,6 +107,24 @@ export function createApp(options: AppOptions) {
     amountScale: 1,
     payees: {},
   };
+  const poller: ReceiptPoller | undefined =
+    options.receiptPoll && adapter.status !== undefined
+      ? createReceiptPoller({
+          ...options.receiptPoll,
+          refresh: (intentId) => refreshIntent(intentId, ledger, adapter),
+          onError: (intentId, err) =>
+            console.error(`receipt poll ${intentId}: ${err instanceof Error ? err.message : String(err)}`),
+        })
+      : undefined;
+  /** Hands a `paid` + pending receipt result to the background poller (unknown outcomes need a manual resolve). */
+  const followUp = <T extends { intentId: string; status: string; receipt?: { status: string }; needsManualResolve?: boolean }>(
+    result: T,
+  ): T => {
+    if (poller && result.status === 'paid' && result.receipt?.status === 'pending' && result.needsManualResolve !== true) {
+      poller.watch(result.intentId);
+    }
+    return result;
+  };
 
   const routes: Route[] = [
     {
@@ -133,7 +157,7 @@ export function createApp(options: AppOptions) {
             const existing = await ledger.get(intent.id);
             if (existing) intent.createdAt = existing.intent.createdAt;
           }
-          const result = await runPayment(intent, policy, ledger, adapter);
+          const result = followUp(await runPayment(intent, policy, ledger, adapter));
           return { status: result.replayed ? 200 : 201, body: { ...result, intent } };
         },
       },
@@ -143,7 +167,7 @@ export function createApp(options: AppOptions) {
       methods: {
         POST: async (req, [id]) => {
           const { approver } = parseDecisionBody(await readJson(req), false);
-          return { status: 200, body: await approve(id!, { policy, ledger, adapter, approver }) };
+          return { status: 200, body: followUp(await approve(id!, { policy, ledger, adapter, approver })) };
         },
       },
     },
@@ -271,12 +295,19 @@ export function createApp(options: AppOptions) {
     ledger,
     adapter,
     getPolicy: (): Policy => structuredClone(policy),
+    /** Intent ids the receipt poller is still following (empty when polling is off). */
+    pollingIntents: (): string[] => poller?.watching() ?? [],
+    /** Stops background work (the receipt poller). */
+    close: (): void => poller?.stop(),
   };
 }
 
-/** createApp + node:http server (not listening yet). */
+/** createApp + node:http server (not listening yet). Closing the server stops the receipt poller. */
 export function createServer(options: AppOptions): Server {
-  return createHttpServer(createApp(options).listener);
+  const app = createApp(options);
+  const server = createHttpServer(app.listener);
+  server.on('close', () => app.close());
+  return server;
 }
 
 /**

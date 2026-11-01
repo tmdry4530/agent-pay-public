@@ -92,8 +92,18 @@ Owner checklist:
       list two ways:
       - a wallet from the curated list at [wallet.near.org](https://wallet.near.org/). Some wallets create named
         testnet accounts directly; write down the seed phrase.
-      - the NEAR CLI: `near create-account <name>.testnet --useFaucet` creates the account and funds it from
-        the testnet faucet.
+      - the NEAR CLI ([near-cli-rs](https://github.com/near/near-cli-rs) 0.30.x; checked against 0.30.1). This
+        creates the account, has the testnet faucet service pay for it, generates a new key pair and saves it to
+        the CLI keychain:
+
+        ```sh
+        near account create-account sponsor-by-faucet-service <name>.testnet \
+          autogenerate-new-keypair save-to-keychain network-config testnet create
+        ```
+
+        Source: [near-cli-rs v0.30.1 guide, `create-account` → `sponsor-by-faucet-service`](https://github.com/near/near-cli-rs/blob/v0.30.1/docs/GUIDE.en.md#sponsor-by-faucet-service---I-would-like-the-faucet-service-sponsor-to-cover-the-cost-of-creating-an-account-testnet-only-for-now).
+        The subcommand chain was also checked against `near account create-account … --help` on near-cli-rs 0.30.1.
+        The old JS CLI form `near create-account <name>.testnet --useFaucet` does not exist in near-cli-rs.
 
       Docs: [Create an Account](https://docs.near.org/getting-started/create-account),
       [Creating Implicit & Named Accounts](https://docs.near.org/protocol/tutorials/creating-implicit-and-named-accounts).
@@ -103,8 +113,15 @@ Owner checklist:
       The demo sends 0.1 NEAR per `small` run and the integration test sends 0.001 NEAR, plus gas. Whether one
       faucet request covers several runs *needs confirmation*: the docs say only that it sends "a small amount",
       and they note that the external Testnet Faucet "might be out of tokens at times".
-- [ ] **Get the account's private key.** If the account was made with the CLI, NEAR's docs give
-      `near account export-account <name>.testnet` to export the seed phrase or private key. With a wallet, use
+- [ ] **Get the account's private key.** If the account was made with the CLI, export it with near-cli-rs 0.30.x
+      (it prints `ed25519:…`; paste it straight into the local `.env`, never into a file in the repo or a chat):
+
+      ```sh
+      near account export-account <name>.testnet using-private-key network-config testnet
+      ```
+
+      Source: [near-cli-rs v0.30.1 guide, `export-account` → `using-private-key`](https://github.com/near/near-cli-rs/blob/v0.30.1/docs/GUIDE.en.md#using-private-key---export-existing-account-using-a-private-key).
+      Use `using-seed-phrase` instead of `using-private-key` for the seed phrase. With a wallet, use
       the wallet's backup/export flow. How each wallet exports a raw private key (as opposed to a seed phrase)
       differs by wallet and *needs confirmation* for the wallet you choose. The CLI route is the documented one.
 - [ ] **Create or pick a receiver account**: a second testnet account that receives the transfers, either
@@ -149,6 +166,31 @@ The built-in scenarios pay `openai-api`, so include at least that name:
 `.env` holds one `DEMO_PAYEES` value, so change it when you switch rails. Invalid entries (a bad email on
 `paypal`, a wrong-network or invalid account on `near`) make the API exit 1 at startup with a `demo_payees:`
 error.
+
+Format: comma-separated `name=address` pairs; whitespace around each item, name and address is trimmed. The
+logical names the demo uses are `openai-api`, `anthropic-api`, `vercel` and `near-compute`. Examples with
+placeholder addresses (replace them with accounts you own):
+
+```sh
+# RAIL=near: <receiver>.testnet is your second testnet account (a 64-char hex implicit account also works)
+DEMO_PAYEES=openai-api=<receiver>.testnet,anthropic-api=<receiver>.testnet,vercel=<receiver>.testnet,near-compute=<receiver>.testnet
+# RAIL=paypal: the personal sandbox account's email
+DEMO_PAYEES=openai-api=<sandbox-personal-email>,anthropic-api=<sandbox-personal-email>
+```
+
+Where it is read: `apps/api/src/main.ts` calls `railSeed(config.rail, process.env)` in `apps/api/src/seed.ts`,
+which parses the value with `parseDemoPayees` and builds the policy allowlist from the addresses. Checks at
+startup:
+
+- each item must be `name=address` with both parts non-empty; a repeated name is rejected
+  (`demo_payees: duplicate logical payee name "…"`);
+- `RAIL=paypal`: each address must pass a simple email check (one `@`, a dot in the domain, no spaces);
+- `RAIL=near`: each address must pass `isAcceptedPayee` (`packages/adapters/src/near-account.ts`) for
+  `NEAR_NETWORK`: a valid account id ending in `.testnet` on testnet (`.near` on mainnet), or a 64-char hex
+  implicit account. This is a format check only; it does **not** ask the network whether the account exists, so
+  confirm the receiver with `near account view-account-summary <receiver>.testnet network-config testnet now`
+  before the demo.
+- `RAIL=mock` ignores `DEMO_PAYEES`.
 
 Rail seeds (from `apps/api/src/seed.ts`):
 

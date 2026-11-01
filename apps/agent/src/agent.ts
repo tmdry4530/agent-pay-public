@@ -71,7 +71,7 @@ export interface RunAgentOptions {
   autoApproveAs?: string;
   /** Pause before the simulated approval so the wait step is visible. Default 0. */
   approveDelayMs?: number;
-  /** Defaults to RuleBasedPlanner. Plug an LLM planner in here. */
+  /** Defaults to RuleBasedPlanner. `createPlanner('llm')` gives the OpenRouter planner (rule-based fallback). */
   planner?: Planner;
   /** Call GET /health before anything else and fail fast (exit 1) if the API is down. Default true. */
   healthCheck?: boolean;
@@ -293,9 +293,14 @@ export async function runAgent(options: RunAgentOptions, ioOverrides: Partial<Ag
     return fail(err);
   }
   ctx.quote = quote;
-  step('quote', `${planner.name} quoted ${quote.amount} ${quote.currency} to ${quote.payee} (${quote.purpose})`, {
-    planner: planner.name,
+  const plannedBy = quote.trace?.planner ?? planner.name;
+  const fallbackNote = quote.trace?.fallback
+    ? ` [fallback from ${quote.trace.fallback.from}: ${quote.trace.fallback.reason}]`
+    : '';
+  step('quote', `${plannedBy} quoted ${quote.amount} ${quote.currency} to ${quote.payee} (${quote.purpose})${fallbackNote}`, {
+    planner: plannedBy,
     quote,
+    ...(quote.trace ? { plannerTrace: quote.trace } : {}),
   });
 
   let payee = quote.payee;

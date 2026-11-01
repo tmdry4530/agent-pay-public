@@ -192,9 +192,37 @@ function nearSeed(env: Readonly<Record<string, string | undefined>>): RailSeed {
   return { rail, policy, currency: 'NEAR', amountScale: 0.01, payees };
 }
 
-export function railSeed(rail: Rail, env: Readonly<Record<string, string | undefined>> = {}): RailSeed {
+function baseRailSeed(rail: Rail, env: Readonly<Record<string, string | undefined>>): RailSeed {
   if (rail === 'mock') return mockSeed();
   if (rail === 'paypal') return paypalSeed(env);
   if (rail === 'near') return nearSeed(env);
   throw new AdapterConfigError(`unknown_rail: ${rail}`);
+}
+
+/**
+ * Live-demo knob: DEMO_APPROVAL_ABOVE lowers the seed policy's `requireApprovalAbove` (in the rail's currency:
+ * USD for mock/paypal, NEAR for near) so a small payment stops for human approval on stage. Unset or empty keeps
+ * the defaults (50 USD, 0.5 NEAR). Must be a number >= 0 and below the rail's perTxMax.
+ */
+export function demoApprovalAbove(
+  env: Readonly<Record<string, string | undefined>>,
+  rail: Rail,
+  perTxMax: number,
+): number | undefined {
+  const raw = env.DEMO_APPROVAL_ABOVE?.trim();
+  if (raw === undefined || raw === '') return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value >= perTxMax) {
+    throw new AdapterConfigError(
+      `invalid_demo_approval_above: DEMO_APPROVAL_ABOVE must be a number >= 0 and below perTxMax ${perTxMax} (RAIL=${rail}), got "${raw}"`,
+    );
+  }
+  return value;
+}
+
+export function railSeed(rail: Rail, env: Readonly<Record<string, string | undefined>> = {}): RailSeed {
+  const seed = baseRailSeed(rail, env);
+  const approvalAbove = demoApprovalAbove(env, rail, seed.policy.perTxMax);
+  if (approvalAbove !== undefined) seed.policy = { ...seed.policy, requireApprovalAbove: approvalAbove };
+  return seed;
 }

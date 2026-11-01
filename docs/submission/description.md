@@ -62,10 +62,11 @@ becomes 0.1 NEAR). A React web demo walks the same pipeline; its Mock/PayPal/NEA
 TypeScript run directly by Node 24. Core, API and agent CLI have no third-party runtime
 dependencies. The web demo uses React and Vite. The `paypal` adapter targets PayPal Payouts v1 sandbox
 (email payee, status refresh, no refund). The `near` adapter signs one native NEAR testnet transfer through a
-zero-dependency JSON-RPC client; transfers are final (no refund). Neither has been run against the live services
-yet. A PayPal Orders v2 module (`paypal-orders`) stays adapter-side only.
+zero-dependency JSON-RPC client; transfers are final (no refund). Both rails have been tested end-to-end against
+the real test networks: PayPal Payouts sandbox (payout batch `XWUX42FV8377Q` reached `SUCCESS`) and NEAR testnet.
+Neither has been run on PayPal production (live) or NEAR mainnet. A PayPal Orders v2 module (`paypal-orders`) stays adapter-side only.
 
 ### Next steps
 
-- Add an LLM planner behind the existing `Planner` interface; the policy engine still has the final say.
+- Run the optional OpenRouter LLM planner (`--planner llm`, rule-based fallback; the policy engine still decides) in a recorded demo; it is covered by mocked tests only so far.
 - Persist policies, support several agents, and replace the file-locked JSON ledger with a database.

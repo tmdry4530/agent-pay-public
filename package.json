@@ -19,7 +19,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present && cd apps/web && pnpm typecheck",
     "web:install": "cd apps/web && pnpm install --frozen-lockfile",
     "agent": "npm run -s agent -w @agent-pay/agent --",
-    "api": "node --env-file-if-exists=.env apps/api/src/main.ts"
+    "api": "node --env-file-if-exists=.env apps/api/src/main.ts",
+    "secret-scan": "bash scripts/secret-scan.sh"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
