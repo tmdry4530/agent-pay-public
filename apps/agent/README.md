@@ -139,10 +139,23 @@ deploy), near/gpu/compute → near-compute (5 USD per hour), and plain tokens/in
 like `1M tokens`, `500k tokens`, `2.5M`, `3 hours`, `2 deploys` are parsed; the default is 1. No match throws
 `PlannerError` (exit 1). Pass a custom table with `new RuleBasedPlanner(table)`.
 
-**LLM hook:** write `class LlmPlanner implements Planner` that asks a model for a Quote JSON, validates it,
-and throws `PlannerError` on bad output. Then pass it as `runAgent({ ..., planner })` or return it from the
-`'llm'` branch of `createPlanner` (currently throws `not_implemented`). The policy engine still decides, so a
-bad quote is caught by the API.
+**LLM planner:** `createPlanner('llm')` (CLI `--planner llm`) returns `OpenRouterPlanner`
+([src/openrouter-planner.ts](src/openrouter-planner.ts)). It POSTs to OpenRouter Chat Completions
+(`https://openrouter.ai/api/v1/chat/completions`) with plain `fetch`. The key comes from `OPENROUTER_API_KEY`
+and the model from `OPENROUTER_MODEL` (default `openai/gpt-4o-mini`). The request has a 15 s timeout and asks
+for a JSON `{payee, amount, currency, purpose}`, which is schema-checked. The planner falls back to
+`RuleBasedPlanner` when:
+
+- the key is missing (no request is sent);
+- the HTTP status is not 2xx;
+- a network error or timeout occurs;
+- the JSON is malformed;
+- the output is off-schema.
+
+The quote carries `trace: { planner, model?, fallback?: { from, reason } }`, and the `quote` step emits it as
+`plannerTrace`. The key never appears in it: error text is redacted. The LLM only proposes. The API's policy
+engine still rejects over-limit or non-allowlisted proposals and holds large ones for approval; tests cover
+this with a mocked fetch.
 
 ## In-process
 

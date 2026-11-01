@@ -71,7 +71,8 @@ test('built-in scenarios plan to 10 / 150 / 75 USD to openai-api', async () => {
   assert.deepEqual(amounts, { small: 10, 'over-limit': 150, 'needs-approval': 75 });
 });
 
-test('createPlanner: rule works, llm is a not-implemented hook', () => {
+test('createPlanner: rule is RuleBasedPlanner, llm is the OpenRouter planner, anything else throws', () => {
   assert.ok(createPlanner('rule') instanceof RuleBasedPlanner);
-  assert.throws(() => createPlanner('llm'), /not_implemented/);
+  assert.equal(createPlanner('llm', { env: {} }).name, 'openrouter');
+  assert.throws(() => createPlanner('other' as 'rule'), /unknown_planner/);
 });

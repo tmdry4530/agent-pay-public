@@ -235,6 +235,41 @@ the rail's per-transaction max (100 USD / 1 NEAR). Otherwise the API exits 1 wit
 `needs_approval`, so a live demo can show human approval while spending very little. `npm run demo` passes it
 through from the shell (`DEMO_APPROVAL_ABOVE=5 npm run demo`).
 
+### LLM planner (optional, OpenRouter)
+
+The agent CLI's default planner is the deterministic price table. `--planner llm` asks an LLM through
+OpenRouter's Chat Completions API (`https://openrouter.ai/api/v1/chat/completions`, plain `fetch`, no SDK) to
+turn the task into a `{payee, amount, currency, purpose}` proposal:
+
+```sh
+export OPENROUTER_API_KEY=<your-openrouter-key>     # shell env only; never commit it
+# optional: OPENROUTER_MODEL=<openrouter model id>   # default openai/gpt-4o-mini
+npm run agent -- --planner llm --task "buy 2M tokens of Claude inference"
+```
+
+- **The LLM only proposes; the policy decides.** The proposal is schema-checked:
+  - the payee must be a plain id;
+  - the amount must be a positive number with at most 2 decimals;
+  - the currency must equal the requested one;
+  - the purpose must be non-empty.
+
+  It is then submitted as an ordinary intent. The API's policy engine still rejects an over-limit amount or a
+  payee outside the allowlist, and holds an amount above the approval threshold for a human.
+  [`apps/agent/src/openrouter-planner.ts`](apps/agent/src/openrouter-planner.ts) appends the model id to the
+  intent's `purpose`.
+- **Fallback.** In any of these cases the agent plans with the rule-based table instead:
+  - `OPENROUTER_API_KEY` is unset or empty (no network call is made);
+  - the HTTP status is not 2xx;
+  - a network error occurs, or no response arrives within 15 s;
+  - the JSON is malformed;
+  - the output is off-schema.
+
+  The `quote` step records the fallback as `plannerTrace.fallback.reason`, for example
+  `[fallback from openrouter: missing_api_key: OPENROUTER_API_KEY is not set]`.
+- **Key handling.** The key is sent only in the `Authorization` header. It is never logged or written to the
+  trace or ledger. Error text is redacted (the key, any `sk-or-…` string, Bearer credentials) before it is
+  recorded. Tests use a mocked `fetch` only.
+
 ## Scenarios
 
 On the `mock` rail the API starts with this policy for `demo-agent`: per-transaction max 100 USD, daily max 200 USD, approval
@@ -323,8 +358,10 @@ with `daily_limit_exceeded`. Use a fresh `LEDGER_PATH` to reset.
   ledger only when the status changed: `failed` marks the payment failed and frees its amount from the daily
   total. Running it again writes nothing. The agent polls refresh after a paid result with a pending receipt.
   Details: [apps/api/README.md](apps/api/README.md), [packages/core/README.md](packages/core/README.md).
-- **No secrets in the repo.** The default `mock` rail needs no credentials, and the agent makes no LLM or other
-  paid API calls. PayPal and NEAR credentials are read only from your shell environment.
+- **No secrets in the repo.** The default `mock` rail needs no credentials, and the default rule-based planner
+  makes no LLM or other paid API calls. PayPal, NEAR and OpenRouter credentials are read only from the
+  environment. `npm run secret-scan` greps tracked files for key-shaped strings, including `sk-or-` OpenRouter
+  keys.
 - **Environment variables** (API; full table in [apps/api/README.md](apps/api/README.md)):
 
   | Var | Default | |
@@ -421,7 +458,8 @@ branch on 2026-11-01):
   - `DEMO_APPROVAL_ABOVE`;
   - NEAR CLI commands in near-cli-rs 0.30 syntax;
   - `DEMO_PAYEES` docs;
-  - the sandbox/testnet E2E status in the submission description.
+  - the sandbox/testnet E2E status in the submission description;
+  - an optional OpenRouter LLM planner (`--planner llm`) with rule-based fallback, and `npm run secret-scan`.
 
 ## License
 

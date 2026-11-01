@@ -1,3 +1,5 @@
+import { OpenRouterPlanner } from './openrouter-planner.ts';
+
 /** What the agent wants to pay for. Becomes the body of POST /intents (plus agentId). */
 export interface Quote {
   payee: string;
@@ -5,6 +7,17 @@ export interface Quote {
   amount: number;
   currency: string;
   purpose: string;
+  /** Which planner produced this quote, and why it fell back if it did. Not sent to the API. */
+  trace?: PlanTrace;
+}
+
+export interface PlanTrace {
+  /** Planner that produced the quote, e.g. `openrouter` or `rule-based`. */
+  planner: string;
+  /** LLM model id when an LLM planner was involved. */
+  model?: string;
+  /** Set when an LLM planner fell back to the rule-based planner. Never contains the API key. */
+  fallback?: { from: string; reason: string };
 }
 
 export interface PlannerContext {
@@ -16,9 +29,9 @@ export interface PlannerContext {
 /**
  * Turns a free-text task into a Quote.
  *
- * LLM hook: implement this interface (e.g. `class LlmPlanner implements Planner`) by prompting a model
- * for `{ payee, amount, currency, purpose }`, validating the JSON, and throwing PlannerError on bad output.
- * Then pass it as `runAgent({ planner })` or add a branch in `createPlanner`. Nothing here calls an LLM.
+ * `RuleBasedPlanner` (default) is deterministic. `OpenRouterPlanner` (openrouter-planner.ts, `createPlanner('llm')`)
+ * asks an LLM for `{ payee, amount, currency, purpose }`, validates it, and falls back to the rules on any problem.
+ * Either way the API's policy engine decides; a planner only proposes.
  */
 export interface Planner {
   readonly name: string;
@@ -29,7 +42,7 @@ export class PlannerError extends Error {
   override name = 'PlannerError';
 }
 
-/** `llm` is reserved for a future LLM-backed planner. */
+/** `rule` = RuleBasedPlanner; `llm` = OpenRouterPlanner with rule-based fallback. */
 export type PlannerKind = 'rule' | 'llm';
 
 type Unit = 'token' | 'hour' | 'deploy';
@@ -110,11 +123,25 @@ export class RuleBasedPlanner implements Planner {
   }
 }
 
-/**
- * Planner factory. TODO(llm): return an LLM-backed Planner for kind 'llm' (needs a model client and key;
- * intentionally not wired in this demo).
- */
-export function createPlanner(kind: PlannerKind = 'rule'): Planner {
+export interface CreatePlannerOptions {
+  /** Environment to read OPENROUTER_API_KEY / OPENROUTER_MODEL from. Default process.env. */
+  env?: Readonly<Record<string, string | undefined>>;
+  /** Injected fetch for the LLM planner (tests). */
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/** Planner factory. `llm` reads OPENROUTER_API_KEY and OPENROUTER_MODEL; without a key it plans by the rules. */
+export function createPlanner(kind: PlannerKind = 'rule', options: CreatePlannerOptions = {}): Planner {
   if (kind === 'rule') return new RuleBasedPlanner();
-  throw new PlannerError('not_implemented: llm planner is a TODO; implement Planner and pass it to runAgent');
+  if (kind === 'llm') {
+    const env = options.env ?? process.env;
+    return new OpenRouterPlanner({
+      apiKey: env.OPENROUTER_API_KEY,
+      model: env.OPENROUTER_MODEL,
+      fetch: options.fetch,
+      timeoutMs: options.timeoutMs,
+    });
+  }
+  throw new PlannerError(`unknown_planner: ${String(kind)} (expected rule | llm)`);
 }

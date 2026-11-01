@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { runAgent } from './agent.ts';
+import { createPlanner } from './planner.ts';
 import { SCENARIO_NAMES, isScenarioName, type ScenarioName } from './scenarios.ts';
 
 const HELP = `agent-pay task agent (demo CLI)
@@ -15,6 +16,9 @@ Options:
                            they differ
   --agent-id <id>          Agent id (default: demo-agent)
   --task <text>            Task description for the planner
+  --planner <rule|llm>     rule (default): deterministic price table. llm: OpenRouter (OPENROUTER_API_KEY,
+                           optional OPENROUTER_MODEL); falls back to rule on a missing key, error, timeout or
+                           invalid output. The API's policy still decides either way
   --scenario <name>        Built-in demo task: small | over-limit | needs-approval
   --timeout-ms <n>         Approval wait and pending-receipt wait timeout (default: 120000)
   --poll-ms <n>            Ledger / refresh poll interval (default: 1000)
@@ -37,6 +41,7 @@ async function main(): Promise<void> {
       rail: { type: 'string' },
       'agent-id': { type: 'string', default: 'demo-agent' },
       task: { type: 'string' },
+      planner: { type: 'string', default: 'rule' },
       scenario: { type: 'string' },
       'timeout-ms': { type: 'string', default: '120000' },
       'poll-ms': { type: 'string', default: '1000' },
@@ -97,6 +102,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  const plannerKind = values.planner;
+  if (plannerKind !== 'rule' && plannerKind !== 'llm') {
+    console.error('invalid --planner: expected rule or llm');
+    process.exitCode = 1;
+    return;
+  }
+
   const expectedRail = values.rail?.trim();
   if (values.rail !== undefined && !expectedRail) {
     console.error('invalid --rail: expected a rail name such as mock, paypal or near');
@@ -115,6 +127,7 @@ async function main(): Promise<void> {
     autoApproveAs: values['auto-approve-as'],
     approveDelayMs,
     expectedRail,
+    planner: createPlanner(plannerKind),
   });
 
   process.exitCode = result.exitCode;

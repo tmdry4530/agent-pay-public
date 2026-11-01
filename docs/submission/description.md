@@ -68,5 +68,5 @@ Neither has been run on PayPal production (live) or NEAR mainnet. A PayPal Order
 
 ### Next steps
 
-- Add an LLM planner behind the existing `Planner` interface; the policy engine still has the final say.
+- Run the optional OpenRouter LLM planner (`--planner llm`, rule-based fallback; the policy engine still decides) in a recorded demo; it is covered by mocked tests only so far.
 - Persist policies, support several agents, and replace the file-locked JSON ledger with a database.
