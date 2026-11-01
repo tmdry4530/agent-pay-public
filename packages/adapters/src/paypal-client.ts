@@ -11,11 +11,20 @@ export type PayPalErrorCode =
   | 'PAYPAL_SERVER_ERROR'
   | 'UNKNOWN';
 
+/** One entry of a PayPal error body's `details` array (the `value` field is never kept: it can echo input). */
+export interface PayPalErrorDetail {
+  field?: string;
+  location?: string;
+  issue?: string;
+  description?: string;
+}
+
 export class PayPalApiError extends Error {
   readonly status: number;
   readonly code: PayPalErrorCode;
   readonly issue?: string;
   readonly debugId?: string;
+  readonly details?: PayPalErrorDetail[];
   readonly retryable: boolean;
 
   constructor(
@@ -26,6 +35,7 @@ export class PayPalApiError extends Error {
       name?: string;
       issue?: string;
       debugId?: string;
+      details?: PayPalErrorDetail[];
       retryable: boolean;
     },
   ) {
@@ -35,6 +45,7 @@ export class PayPalApiError extends Error {
     this.code = opts.code;
     this.issue = opts.issue;
     this.debugId = opts.debugId;
+    if (opts.details !== undefined && opts.details.length > 0) this.details = opts.details;
     this.retryable = opts.retryable;
   }
 }
@@ -112,23 +123,53 @@ interface PayPalErrorBody {
   name?: string;
   message?: string;
   debug_id?: string;
-  details?: Array<{ issue?: string; description?: string }>;
+  details?: Array<{ field?: unknown; location?: unknown; issue?: unknown; description?: unknown }>;
   error?: string;
   error_description?: string;
   links?: Array<{ href?: string; rel?: string }>;
 }
 
+function detailString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function parseDetails(raw: unknown): PayPalErrorDetail[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PayPalErrorDetail[] = [];
+  for (const d of raw.slice(0, 10)) {
+    if (d === null || typeof d !== 'object') continue;
+    const r = d as Record<string, unknown>;
+    const detail: PayPalErrorDetail = {};
+    const field = detailString(r.field);
+    const location = detailString(r.location);
+    const issue = detailString(r.issue);
+    const description = detailString(r.description);
+    if (field) detail.field = field;
+    if (location) detail.location = location;
+    if (issue) detail.issue = issue;
+    if (description) detail.description = description;
+    if (Object.keys(detail).length > 0) out.push(detail);
+  }
+  return out;
+}
+
 export async function parsePayPalError(response: Response): Promise<PayPalApiError> {
   const status = response.status;
   const code = codeFromStatus(status);
+  // PayPal also sends the debug id as a response header (useful when the body is not JSON).
+  const headerDebugId = response.headers.get('paypal-debug-id') ?? undefined;
   let body: PayPalErrorBody | null = null;
   const text = await response.text();
   try {
     body = JSON.parse(text) as PayPalErrorBody;
   } catch {
+    body = null;
+  }
+  if (body === null || typeof body !== 'object') {
     return new PayPalApiError(`PayPal API error (${status})`, {
       status,
       code,
+      debugId: headerDebugId,
       retryable: isRetryableCode(code),
     });
   }
@@ -139,18 +180,20 @@ export async function parsePayPalError(response: Response): Promise<PayPalApiErr
       status,
       code,
       name: body.error,
+      debugId: body.debug_id ?? headerDebugId,
       retryable: isRetryableCode(code),
     });
   }
 
   const message = body.message ?? `PayPal API error (${status})`;
-  const issue = body.details?.[0]?.issue;
+  const details = parseDetails(body.details);
   return new PayPalApiError(message, {
     status,
     code,
     name: body.name,
-    issue,
-    debugId: body.debug_id,
+    issue: details[0]?.issue,
+    debugId: body.debug_id ?? headerDebugId,
+    details,
     retryable: isRetryableCode(code),
   });
 }

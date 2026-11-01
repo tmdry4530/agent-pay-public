@@ -20,6 +20,7 @@ export {
   type PayPalConfig,
   type PayPalErrorCode,
 } from './paypal.ts';
+export { paypalErrorMeta, redactSecrets } from './paypal-error-meta.ts';
 export { createPayPalOrdersAdapter, type PayPalOrdersAdapter } from './paypal-orders.ts';
 export { createNearAdapter, type NearAdapterOptions } from './near.ts';
 export {

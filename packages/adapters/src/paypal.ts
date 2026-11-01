@@ -8,6 +8,7 @@ import {
   PayPalApiError,
   type PayPalConfig,
 } from './paypal-client.ts';
+import { paypalErrorMeta } from './paypal-error-meta.ts';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -219,8 +220,10 @@ function paypalErrorNameForMeta(error: unknown): string | undefined {
 function buildPendingUnknownMeta(
   error: unknown,
   extraMeta?: Record<string, string>,
+  secrets: readonly string[] = [],
 ): Record<string, string> {
   const meta: Record<string, string> = {
+    ...paypalErrorMeta(error, 'payout', secrets),
     unknownOutcome: 'true',
     needsManualResolve: 'true',
     ...extraMeta,
@@ -235,8 +238,10 @@ function buildPendingUnknownMeta(
 function buildPendingUnknownBatchMeta(
   error: unknown,
   extraMeta?: Record<string, string>,
+  secrets: readonly string[] = [],
 ): Record<string, string> {
   const meta: Record<string, string> = {
+    ...paypalErrorMeta(error, 'payout', secrets),
     unknownOutcome: 'true',
     ...extraMeta,
   };
@@ -266,6 +271,8 @@ function extractBatchIdFromDuplicateError(
 export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter {
   const http = createPayPalHttp(config);
   const { nowMs, onError, apiCall } = http;
+  /** Removed verbatim from any error text recorded in receipt meta. */
+  const secrets = [config.clientId, config.clientSecret];
 
   async function getPayoutBatch(
     batchId: string,
@@ -282,7 +289,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
       externalId: batchId,
       status: 'pending',
       at,
-      meta: buildPendingUnknownBatchMeta(error, { ...extraMeta, ...more }),
+      meta: buildPendingUnknownBatchMeta(error, { ...extraMeta, ...more }, secrets),
     });
     let response: Response;
     try {
@@ -333,6 +340,8 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
           externalId: '',
           status: 'failed',
           at,
+          // Why it failed (HTTP status, PayPal name/message/debug_id/details), redacted; never headers.
+          meta: paypalErrorMeta(error, op, secrets),
         };
       };
 
@@ -348,7 +357,7 @@ export function createPayPalAdapter(config: PayPalConfig): StatusCapableAdapter 
           externalId: '',
           status: 'pending',
           at,
-          meta: buildPendingUnknownMeta(error, extraMeta),
+          meta: buildPendingUnknownMeta(error, extraMeta, secrets),
         };
       };
 
